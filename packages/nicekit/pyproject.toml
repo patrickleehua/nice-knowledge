@@ -6,9 +6,12 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.18.5",
+    "anthropic>=0.116.0",
+    "email-validator>=2.3.0",
     "cryptography>=44.0.0",
     "fastapi>=0.139.0",
     "httpx>=0.28.1",
+    "openai>=2.44.0",
     "prometheus-client>=0.25.0",
     "psycopg[binary]>=3.3.4",
     "pwdlib[argon2]>=0.3.0",
