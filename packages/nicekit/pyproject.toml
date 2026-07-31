@@ -1,0 +1,55 @@
+[project]
+name = "nicekit"
+version = "0.1.0"
+description = "多租户 Agent + KB 平台 SDK(core/tenancy/llm/kb/agent/capabilities/runtime 分层)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.18.5",
+    "cryptography>=44.0.0",
+    "fastapi>=0.139.0",
+    "httpx>=0.28.1",
+    "prometheus-client>=0.25.0",
+    "psycopg[binary]>=3.3.4",
+    "pwdlib[argon2]>=0.3.0",
+    "pydantic-settings>=2.14.2",
+    "pyjwt>=2.13.0",
+    "python-dotenv>=1.2.2",
+    "redis>=8.0.1",
+    "sqlalchemy>=2.0.51",
+    "sqlmodel>=0.0.39",
+    "uvicorn>=0.50.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nicekit"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic autogenerate 产物不做行宽约束
+"src/nicekit/migrations/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "live: 需要真实外部服务(LLM API / 数据库)的用例,默认跳过,用 -m live 显式运行",
+]
+addopts = "-m 'not live'"

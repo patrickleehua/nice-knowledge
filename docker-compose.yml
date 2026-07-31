@@ -1,0 +1,68 @@
+# 开发基础设施三件套(postgres/redis/minio)+ bucket 初始化。
+# 应用服务(API/worker/beat)由 apps/demo 在 P4 阶段自行组装,不在本文件内。
+services:
+  postgres:
+    build:
+      context: ./deploy/postgres
+    image: niceknowledge-postgres:17.10-pgvector0.8.5-zhparser2e995c4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: niceknowledge
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-extensions.sql:/docker-entrypoint-initdb.d/00-extensions.sql:ro
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-roles.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U postgres -d niceknowledge -Atqc \"SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'niceknowledge_migrator' AND NOT rolsuper) AND (SELECT count(*) FROM pg_extension WHERE extname IN ('vector', 'pg_trgm', 'zhparser')) = 3 AND COALESCE(current_setting('zhparser.multi_short', true), '') IN ('on', 'true')\" | grep -qx t",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: niceknowledge
+      MINIO_ROOT_PASSWORD: niceknowledge-dev-secret
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  createbucket:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 niceknowledge niceknowledge-dev-secret &&
+      mc mb --ignore-existing local/niceknowledge
+      "
+
+volumes:
+  pgdata:
+  miniodata:

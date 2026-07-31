@@ -33,72 +33,48 @@ lerna-debug.log*
 # Local operational artifacts (database dumps and object-store backups)
 .local/
 
-# Python / backend
-backend/.venv/
-backend/venv/
-backend/env/
-backend/**/__pycache__/
-backend/**/*.py[cod]
-backend/.pytest_cache/
-backend/**/.pytest_cache/
-backend/.ruff_cache/
-backend/.mypy_cache/
-backend/.pyre/
-backend/.tox/
-backend/.nox/
-backend/.coverage
-backend/htmlcov/
-backend/dist/
-backend/build/
-backend/*.egg-info/
-backend/.eggs/
-backend/.uv-cache/
-backend/.cache/
-backend/.ipynb_checkpoints/
-backend/*.db
-backend/*.sqlite
-backend/*.sqlite3
+# Python (uv workspace: 根与 packages/* 通用)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+.uv-cache/
+.cache/
+.ipynb_checkpoints/
+*.db
+*.sqlite
+*.sqlite3
 
-# Node / frontend
-frontend/node_modules/
-frontend/.pnp/
-frontend/.pnp.*
-frontend/.pnpm-store/
-frontend/.yarn/*
-!frontend/.yarn/patches/
-!frontend/.yarn/plugins/
-!frontend/.yarn/releases/
-!frontend/.yarn/versions/
-
-# Frontend build and tooling output
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/dist/
-frontend/coverage/
-frontend/.turbo/
-frontend/.vercel/
-frontend/.eslintcache
-frontend/.stylelintcache
-frontend/*.tsbuildinfo
-frontend/next-env.d.ts
+# Node / frontend(apps/demo/frontend,P5)
+node_modules/
+.pnp/
+.pnp.*
+.pnpm-store/
+.next/
+out/
+coverage/
+.turbo/
+.vercel/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+next-env.d.ts
 
 # Playwright MCP 会话产物
 .playwright-mcp/
-t6-*.png
-
-# KB 多模态视觉 QA 为本地可再生成证据，不提交测试截图或渲染制品
-/backend/evaluation/kb/business-media-export-visual-qa*
-/docs/production-readiness/kb-multimodal-production-readiness/*.png
-
-# Local oversized docs excluded from GitHub push limit
-docs/20260702-客户知识文档部分示例样本/部分产品介绍PPT/欧洲壹号产品介绍PPT/欧洲壹号系列.pptx
-docs/20260702-客户知识文档部分示例样本/部分产品介绍PPT/波塞黑产品介绍PPT/巴干达半岛（动态）.pptx
-docs/20260702-客户知识文档部分示例样本/部分产品介绍PPT/波塞黑产品介绍PPT/巴干达半岛（静态）.pptx
-docs/20260702-客户知识文档部分示例样本/部分产品介绍PPT/欧洲壹号产品介绍PPT/欧洲壹号系列.pdf
-
-# 本地 API 密钥测试记录(含密钥,不入库)
-docs/API-KEY-TEST.md
 
 # Claude Code agent 临时工作树
 .claude/worktrees/

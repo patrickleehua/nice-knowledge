@@ -1,7 +1,26 @@
 [project]
 name = "nice-knowledge"
 version = "0.1.0"
-description = "Add your description here"
+description = "多租户 Agent + KB 平台 SDK 单仓(uv workspace 根,不承载代码)"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "nicekit",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.20",
+]
+
+[tool.uv]
+# workspace 根只做聚合,不构建/安装自身
+package = false
+
+[tool.uv.workspace]
+members = ["packages/nicekit"]
+
+[tool.uv.sources]
+nicekit = { workspace = true }
