@@ -9,9 +9,10 @@
 5. platform_read 旁路:平台 org 上下文可读全租户 usage_daily,但写入面不变,
    且未加旁路的表(audit_logs)不受影响。
 
-与 TF 的差异:不依赖 alembic 已建表——fixture 用 migrator 账号 create_all 建
-tenancy 表,并用 nicekit/migrations/rls.py 施加 RLS(见 _tenancy_pg.py),
-因此本文件同时验证了 helper 生成的 SQL 在真实 PG 上的正确性。
+6. baseline 迁移对每张带 org_id 的表都开了 FORCE RLS(豁免清单显式列出)。
+
+库由 baseline 迁移建(见 _tenancy_pg.py),因此这里验证的是真实生产路径:
+迁移里 rls.py helper 生成的策略 SQL 在 PG 上的实际行为。
 """
 
 from datetime import UTC, datetime
@@ -23,10 +24,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel
 
 from nicekit.core.config import get_settings
-from nicekit.migrations import rls
 from nicekit.models.tenancy import AuditLog, Organization, UsageDaily
 
 pytestmark = pytest.mark.live
@@ -159,9 +158,41 @@ async def test_platform_read_does_not_leak_to_other_tables(two_orgs) -> None:
     assert rows == [], "platform_read 旁路只对显式声明的表生效"
 
 
-def test_rls_tables_check_after_helper_registration() -> None:
-    """建表 fixture 走过 op_enable_org_rls 后,三张 RLS 表不再出现在缺失清单;
-    身份表(刻意不开 RLS)如实上报,由 baseline 作者显式豁免。"""
-    missing = set(rls.rls_tables_check(SQLModel.metadata))
-    assert not {"audit_logs", "notifications", "usage_daily"} & missing
-    assert {"memberships", "invitations", "refresh_tokens"} <= missing
+async def test_baseline_enables_rls_on_every_org_table() -> None:
+    """baseline 迁移跑完后,库里带 org_id 的表要么已开 FORCE RLS,要么在豁免清单。
+
+    注意不能用 rls.rls_tables_check():它查的是模块级登记 set,只在执行迁移的
+    那个进程内有意义(编写期自检);跨进程要看数据库的真实状态。
+    """
+    exempt = {
+        # 身份表:登录发生在 org 上下文建立之前,由应用层过滤
+        "memberships",
+        "invitations",
+        "refresh_tokens",
+        # 平台配置表:org_id 可为 NULL 表示平台级,由 API 层 platform_admin 守门
+        "model_routes",
+        "agent_cards",
+        "mcp_servers",
+    }
+    engine = create_async_engine(get_settings().migration_database_url, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+                        "  FROM pg_class c "
+                        "  JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "  JOIN pg_attribute a ON a.attrelid = c.oid "
+                        "   AND a.attname = 'org_id' "
+                        " WHERE n.nspname = 'public' AND c.relkind = 'r'"
+                    )
+                )
+            ).all()
+    finally:
+        await engine.dispose()
+    assert rows, "baseline 未建表?"
+    unprotected = {name for name, enabled, _ in rows if not enabled} - exempt
+    assert not unprotected, f"带 org_id 却未开 RLS:{sorted(unprotected)}"
+    not_forced = {name for name, enabled, forced in rows if enabled and not forced}
+    assert not not_forced, f"开了 RLS 但未 FORCE(表 owner 可绕过):{sorted(not_forced)}"

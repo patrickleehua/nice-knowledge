@@ -152,6 +152,13 @@ class LlmSettings(_DomainSettings):
 
 
 class KbSettings(_DomainSettings):
+    # 向量维度:必须与 baseline 迁移里的 vector(D) 及所用嵌入模型一致。
+    # 换模型需走 embedding_reindex campaign 全量重建,不能只改这个值。
+    kb_embedding_dim: int = Field(default=1024, gt=0)
+    # 中文全文检索配置名(zhparser),由 baseline 迁移创建。改名需同步迁移里的
+    # CREATE TEXT SEARCH CONFIGURATION 与各 tsvector 生成列表达式。
+    kb_fts_regconfig: str = "public.nicekit_zhparser"
+
     # KB ingestion leases are shared by inline and celery execution paths.
     kb_ingest_lease_seconds: int = Field(default=120, gt=0)
     kb_ingest_heartbeat_seconds: int = Field(default=30, gt=0)
