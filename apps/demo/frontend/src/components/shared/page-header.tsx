@@ -4,9 +4,9 @@
  * @example
  * ```tsx
  * <PageHeader
- *   title="旅行计划列表"
- *   description="管理全部定制旅行计划"
- *   actions={<Button><Plus />新建旅行计划</Button>}
+ *   title="知识库列表"
+ *   description="管理全部知识库"
+ *   actions={<Button><Plus />新建知识库</Button>}
  * />
  * ```
  */

@@ -469,7 +469,7 @@ describe("AdminDiagnosticsPage", () => {
     expect(screen.getByText("MCP「travel-tools」离线")).toBeDefined();
     expect(screen.getByText("1 个租户存在 Agent 配置问题")).toBeDefined();
     expect(screen.getByText("1 个租户的 Agent 定时任务异常")).toBeDefined();
-    expect(screen.getByText("1 个租户的知识采集线路需要处理")).toBeDefined();
+    expect(screen.getByText("1 个租户的知识采集链路需要处理")).toBeDefined();
 
     await closePanel();
     const ecosystemDialog = await openPanel("Skills 与 MCP");
@@ -482,7 +482,7 @@ describe("AdminDiagnosticsPage", () => {
     expect(within(agentDialog).getByText("1 个逾期")).toBeDefined();
 
     await closePanel();
-    const knowledgeDialog = await openPanel("知识采集线路");
+    const knowledgeDialog = await openPanel("知识采集链路");
     fireEvent.click(within(knowledgeDialog).getByText("测试租户"));
     expect(
       within(knowledgeDialog).getByText(/上传文档停留时间过长/),

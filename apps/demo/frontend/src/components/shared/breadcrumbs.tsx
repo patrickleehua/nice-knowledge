@@ -5,7 +5,7 @@
  * ```tsx
  * <Breadcrumbs
  *   items={[
- *     { label: "旅行计划", href: "/app/projects" },
+ *     { label: "工作台", href: "/app/chat" },
  *     { label: "英国苏格兰10日" },
  *   ]}
  * />

@@ -6,9 +6,9 @@ import { toolLabel, type ReviewerOverride } from "@/lib/chat";
 function targetLabel(override: ReviewerOverride): string {
   if (override.scope.resource_type && override.scope.resource_id)
     return `${override.scope.resource_type} · ${override.scope.resource_id.slice(0, 8)}`;
-  if (override.scope.target_project_id)
-    return `旅行计划 · ${override.scope.target_project_id.slice(0, 8)}`;
-  return override.scope.mode === "general" ? "通用会话" : "当前旅行计划";
+  if (override.scope.target_scope_id)
+    return `作用域 · ${override.scope.target_scope_id.slice(0, 8)}`;
+  return override.scope.mode === "general" ? "通用会话" : "当前作用域";
 }
 
 function expiryLabel(value: string): string | null {

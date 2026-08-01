@@ -20,15 +20,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import {
-  NOTIFICATION_KIND_LABELS,
+  notificationKindLabel,
   useInvalidateNotifications,
   useNotifications,
   useUnreadCount,
   type NotificationOut,
 } from "@/lib/notifications";
-import { errMsg, fmtDateTime } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
+import { cn, errMsg, fmtDateTime } from "@/lib/utils";
 const PAGE_SIZE = 20;
 
 export default function NotificationsPage() {
@@ -73,7 +71,7 @@ export default function NotificationsPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title="通知"
-        description="报价待审/退回、流水线失败、任务回收、资料过期等系统通知(仅本人可见)"
+        description="定时任务结果、后台任务失败与回收、知识资料过期等系统通知(仅本人可见)"
         actions={
           <Button
             size="sm"
@@ -122,7 +120,7 @@ export default function NotificationsPage() {
             <EmptyState
               icon={Bell}
               title={unreadOnly ? "没有未读通知" : "暂无通知"}
-              description="报价状态流转、后台任务异常与资料过期都会在这里提醒你。"
+              description="定时任务结果、后台任务异常与知识资料过期都会在这里提醒你。"
             />
           </CardContent>
         </Card>
@@ -144,7 +142,7 @@ export default function NotificationsPage() {
                     <span className="size-1.5 shrink-0 rounded-full bg-primary" />
                   )}
                   <ToneBadge tone="muted">
-                    {NOTIFICATION_KIND_LABELS[n.kind] ?? n.kind}
+                    {notificationKindLabel(n.kind)}
                   </ToneBadge>
                   <span className={cn("text-sm", !n.read_at && "font-medium")}>
                     {n.title}

@@ -138,7 +138,7 @@ export function WikiView({ kbId }: { kbId: string }) {
           title={
             pages?.length ? "用上方切换器选择一页开始阅读" : "还没有 wiki 页"
           }
-          description="签证规则、常见问答、内部约定都适合放在这里;正文里用 [[标题]] 建立页面间双链。"
+          description="规则条款、常见问答、内部约定都适合放在这里;正文里用 [[标题]] 建立页面间双链。"
           action={
             <Button onClick={() => setCreate({ open: true })}>
               <Plus className="size-4" />

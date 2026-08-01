@@ -13,9 +13,7 @@
  * ```
  */
 
-import type { StatusMeta } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
+import { cn, type StatusMeta } from "@/lib/utils";
 /** "primary" 为 stage-b StatusMeta 的历史别名,渲染与 "info" 一致 */
 export type Tone =
   | "success"

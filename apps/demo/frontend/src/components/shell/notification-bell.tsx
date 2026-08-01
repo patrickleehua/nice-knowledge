@@ -14,15 +14,13 @@ import { Spinner, ToneBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import {
-  NOTIFICATION_KIND_LABELS,
+  notificationKindLabel,
   useInvalidateNotifications,
   useNotifications,
   useUnreadCount,
   type NotificationOut,
 } from "@/lib/notifications";
-import { errMsg, fmtDateTime } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
+import { cn, errMsg, fmtDateTime } from "@/lib/utils";
 export function NotificationBell() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -118,7 +116,7 @@ export function NotificationBell() {
                       <span className="size-1.5 shrink-0 rounded-full bg-primary" />
                     )}
                     <ToneBadge tone="muted">
-                      {NOTIFICATION_KIND_LABELS[n.kind] ?? n.kind}
+                      {notificationKindLabel(n.kind)}
                     </ToneBadge>
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                       {fmtDateTime(n.created_at)}

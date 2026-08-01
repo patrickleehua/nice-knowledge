@@ -18,7 +18,8 @@ function permissionState(overrides = {}) {
     scope: "session",
     expires_at: null,
     active_run: false,
-    project_id: "project-1",
+    scope_type: "workspace",
+    scope_id: "ws-1",
     custom_rules: {},
     policy_snapshot: {},
     profile_options: [
@@ -49,7 +50,7 @@ function permissionState(overrides = {}) {
       policy_version: 7,
       is_enabled: true,
       shadow_evaluation: false,
-      max_scope: "project",
+      max_scope: "resource",
       max_grant_ttl_seconds: 3600,
       max_full_access_ttl_seconds: 3600,
       reviewer_enabled: false,
@@ -64,10 +65,11 @@ function permissionState(overrides = {}) {
       {
         id: "grant-1",
         session_id: "session-1",
-        project_id: "project-1",
+        scope_type: "workspace",
+        scope_id: "ws-1",
         tool_name: "image_generate",
         category: null,
-        scope: "project",
+        scope: "resource",
         resource_type: null,
         resource_id: null,
         policy_version: 7,
@@ -96,21 +98,21 @@ test("resolves exactly four profiles and preserves organization restrictions", (
 
 test("builds explicit bounded full-access activation only for valid scope and expiry", () => {
   const state = permissionState();
-  assert.deepEqual(buildFullAccessPermissionUpdate(state, "project", 1800), {
+  assert.deepEqual(buildFullAccessPermissionUpdate(state, "resource", 1800), {
     expected_revision: 3,
     expected_policy_version: 7,
     profile: "full_access",
-    scope: "project",
+    scope: "resource",
     expires_in_seconds: 1800,
     acknowledge_full_access: true,
   });
-  assert.equal(buildFullAccessPermissionUpdate(state, "project", 7200), null);
+  assert.equal(buildFullAccessPermissionUpdate(state, "resource", 7200), null);
   assert.equal(
     buildFullAccessPermissionUpdate(
       permissionState({
         organization: { ...state.organization, max_scope: "session" },
       }),
-      "project",
+      "resource",
       1800,
     ),
     null,

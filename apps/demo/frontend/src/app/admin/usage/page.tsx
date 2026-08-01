@@ -30,8 +30,7 @@ import {
   type BillingOrgRow,
   type TraceRow,
 } from "@/lib/billing";
-import { fmtDateTime, fmtSize } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, fmtDateTime, fmtSize } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 interface UsageRow {
@@ -41,7 +40,7 @@ interface UsageRow {
   tokens_in: number;
   tokens_out: number;
   calls: number;
-  /** 通用计量数(stage-d 04):渲染/上传/导出=字节,LLM/OTA 行恒 0 */
+  /** 通用计量数:上传等字节口径的行用它,LLM 行恒 0 */
   quantity: number;
 }
 

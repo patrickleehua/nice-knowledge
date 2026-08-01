@@ -25,8 +25,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   AgentCardDto,
   AgentToolDto,

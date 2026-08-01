@@ -1,11 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
   ChevronDown,
   ChevronUp,
-  Hash,
   ListPlus,
   Play,
   Square,
@@ -14,43 +12,28 @@ import {
 import { useMemo, type ReactNode, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/api";
-import type { ProjectListOut, ProjectOut } from "@/lib/utils";
 
-export const ACTION_PRESETS = [
+/**
+ * 输入框里敲 `/` 弹出的快捷指令。SDK 不知道宿主的业务动作,默认只给
+ * **通用能力**示例;宿主换成自己的一组即可(`<CommandInput presets={…} />`)。
+ */
+export const ACTION_PRESETS: readonly { label: string; prompt: string }[] = [
+  { label: "检索知识库", prompt: "帮我在知识库里查一下：" },
   {
-    label: "新建旅行计划并解析需求",
-    prompt: "根据以下客户询价新建旅行计划并解析需求：",
+    label: "联网调研并标注来源",
+    prompt: "帮我联网查一下,逐条标注来源与发布时间：",
   },
   {
-    label: "按完整计划推进",
-    prompt:
-      "为当前旅行计划制定并执行完整计划：解析需求→检索→行程→报价→文档，每步汇报进度。",
+    label: "读取网页并总结",
+    prompt: "读取下面这些网页并总结要点(保留原文引用)：",
   },
+  { label: "记住一条长期偏好", prompt: "请记住:" },
+  { label: "设定会话目标", prompt: "本次会话的目标是:" },
   {
-    label: "生成行程方案",
-    prompt: "为当前旅行计划检索资料并生成多套行程方案。",
+    label: "安排一个定时任务",
+    prompt: "每周一早上 9 点帮我做一次,并把结果通知我：",
   },
-  { label: "选定方案细化", prompt: "根据客户偏好选定方案并细化每日行程。" },
-  {
-    label: "生成拆分报价",
-    prompt: "基于已确认行程生成拆分报价，并列出待人工确认价格。",
-  },
-  {
-    label: "发起OTA比价",
-    prompt: "对当前报价发起 OTA 实时比价，汇报与成本行的价差并给出回填建议。",
-  },
-  { label: "提交审价", prompt: "检查当前报价校验结果，没有阻塞就提交审价。" },
-  { label: "生成文档", prompt: "为当前旅行计划生成可交付文档。" },
-  {
-    label: "打包导出",
-    prompt: "把当前旅行计划已生成的文档打包成导出包并给出清单。",
-  },
-  {
-    label: "旅行计划标记已发送",
-    prompt: "把当前旅行计划状态推进为已发送（sent）。",
-  },
-  { label: "查询进行中任务", prompt: "查询当前旅行计划进行中的任务和异常。" },
+  { label: "生成一张配图", prompt: "帮我生成一张图片：" },
 ] as const;
 
 export interface QueuedTurn {
@@ -163,7 +146,7 @@ function QueuedTurns({
 export function CommandInput({
   value,
   onChange,
-  onProject,
+  presets = ACTION_PRESETS,
   placeholder,
   above,
   toolbar,
@@ -181,7 +164,8 @@ export function CommandInput({
 }: {
   value: string;
   onChange: (value: string) => void;
-  onProject: (project: ProjectOut) => void;
+  /** `/` 快捷指令表(宿主可整组替换) */
+  presets?: readonly { label: string; prompt: string }[];
   placeholder: string;
   above?: ReactNode;
   toolbar?: ReactNode;
@@ -197,19 +181,10 @@ export function CommandInput({
   onQueuedRun: () => void;
   inputRef?: Ref<HTMLTextAreaElement>;
 }) {
-  const projectTerm = value.startsWith("#") ? value.slice(1).trim() : "";
-  const projects = useQuery({
-    queryKey: ["agent-project-search", projectTerm],
-    queryFn: () =>
-      api.get<ProjectListOut>(
-        `/projects?page_size=8&query=${encodeURIComponent(projectTerm)}`,
-      ),
-    enabled: !disabled && value.startsWith("#"),
-  });
   const showPresets = !disabled && value.startsWith("/");
   const filteredPresets = useMemo(
-    () => ACTION_PRESETS.filter((item) => item.label.includes(value.slice(1))),
-    [value],
+    () => presets.filter((item) => item.label.includes(value.slice(1))),
+    [presets, value],
   );
 
   return (
@@ -227,36 +202,18 @@ export function CommandInput({
         {above && <div className="mb-2">{above}</div>}
         {toolbar && <div className="mb-1 px-1">{toolbar}</div>}
         <div className="relative">
-          {((!disabled && value.startsWith("#")) || showPresets) && (
+          {showPresets && (
             <div className="absolute right-0 bottom-full left-0 z-20 mb-2 max-h-64 overflow-auto rounded-2xl bg-popover p-1.5 shadow-xl ring-1 ring-foreground/10">
-              {value.startsWith("#")
-                ? projects.data?.items.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        onProject(item);
-                        onChange("");
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-accent"
-                    >
-                      <Hash className="size-3.5 text-primary" />
-                      <span className="truncate">{item.title}</span>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {item.status}
-                      </span>
-                    </button>
-                  ))
-                : filteredPresets.map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => onChange(item.prompt)}
-                      className="block w-full rounded-lg px-2.5 py-2 text-left text-sm hover:bg-accent"
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+              {filteredPresets.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => onChange(item.prompt)}
+                  className="block w-full rounded-lg px-2.5 py-2 text-left text-sm hover:bg-accent"
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
           )}
           <div className="rounded-[1.65rem] bg-white p-2 shadow-[0_8px_28px_rgb(0_0_0/0.075)] ring-1 ring-black/[0.075] transition-[box-shadow] focus-within:shadow-[0_10px_34px_rgb(0_0_0/0.11)] dark:bg-[#242422] dark:ring-white/[0.09]">
@@ -285,7 +242,7 @@ export function CommandInput({
                 <span className="hidden sm:inline">
                   {running
                     ? `Enter 加入下一轮${queuedTurns.length ? ` · 已排队 ${queuedTurns.length} 条` : ""}`
-                    : "/ 快捷操作 · # 选择旅行计划"}
+                    : "/ 快捷操作"}
                 </span>
               </p>
               {running && (

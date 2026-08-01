@@ -1,32 +1,17 @@
-// 相对 .mjs 导入:本文件被 node 原生测试直接加载,解析不了 "@/" 别名
-import { RENDER_KIND_LABELS } from "../../lib/render-kind-labels.mjs";
+// 工具卡片的**纯数据**展示层:摘要文案与展开策略。
+//
+// 这里刻意不 import React —— 本文件被 node --test 原生加载(解析不了 "@/" 别名,
+// 也没有 JSX 运行时)。结果的**渲染**扩展点在 result-renderers.tsx。
+//
+// SDK 化改造(MIGRATION-PLAN §5.8):TF 版本在这里硬编码了 BUSINESS_KINDS 与
+// 逐个旅游工具的文案。SDK 不认识宿主的业务工具,因此改为:
+//   1. 内置 17 个通用工具各自的摘要器(它们的输出结构由 SDK 定义,可以写死);
+//   2. `registerToolSummarizer()` 让宿主为自己的工具追加摘要器;
+//   3. 兜底走通用 JSON 摘要(items/total/status/键数),永不返回空白。
 
 export type ToolStatus = "running" | "waiting" | "ok" | "failed";
 
-export type BusinessResultKind =
-  "project" | "demand" | "retrieval" | "itinerary" | "quote" | "document";
-
 export type UnknownRecord = Record<string, unknown>;
-
-const BUSINESS_KINDS: Record<string, BusinessResultKind> = {
-  project_create: "project",
-  demand_parse: "demand",
-  kb_retrieve: "retrieval",
-  itinerary_generate: "itinerary",
-  quote_generate: "quote",
-  render_generate: "document",
-};
-
-const AUTO_EXPAND = new Set([
-  "project_create",
-  "demand_parse",
-  "itinerary_generate",
-  "quote_generate",
-  "render_generate",
-]);
-
-// chat 与旅行计划页共用同一份 kind 文案(消除双字典漂移;权威数据源是 /render-kinds)
-const DOCUMENT_LABELS: Record<string, string> = RENDER_KIND_LABELS;
 
 export function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -73,11 +58,52 @@ export function countRecordValues(value: unknown): number {
   );
 }
 
-export function businessResultKind(
+// ---------------------------------------------------------------------------
+// 扩展点 1:工具结果摘要器注册表
+// ---------------------------------------------------------------------------
+
+/** 返回一行摘要;返回 null / undefined = 交回通用兜底。 */
+export type ToolSummarizer = (
+  output: UnknownRecord,
+) => string | null | undefined;
+
+const summarizers = new Map<string, ToolSummarizer>();
+
+/** 宿主为自己的工具注册摘要器(同名覆盖,便于宿主改写内置文案)。 */
+export function registerToolSummarizer(
   name: string,
-  output: unknown,
-): BusinessResultKind | null {
-  return isRecord(output) ? (BUSINESS_KINDS[name] ?? null) : null;
+  summarizer: ToolSummarizer,
+): void {
+  summarizers.set(name, summarizer);
+}
+
+export function registerToolSummarizers(
+  entries: Readonly<Record<string, ToolSummarizer>>,
+): void {
+  for (const [name, summarizer] of Object.entries(entries)) {
+    summarizers.set(name, summarizer);
+  }
+}
+
+/** 测试与热重载用:清空宿主注册项,内置摘要器不受影响。 */
+export function resetToolSummarizers(): void {
+  summarizers.clear();
+}
+
+// ---------------------------------------------------------------------------
+// 扩展点 2:默认展开的工具名单
+// ---------------------------------------------------------------------------
+
+// 失败一律展开(见 shouldExpandTool);成功时默认折叠,除非宿主显式声明
+// "这个工具的结果本身就是答案",比如一个把长文档拉平的自定义工具。
+const autoExpand = new Set<string>();
+
+export function registerAutoExpandTools(...names: string[]): void {
+  for (const name of names) autoExpand.add(name);
+}
+
+export function resetAutoExpandTools(): void {
+  autoExpand.clear();
 }
 
 export function shouldExpandTool(
@@ -86,27 +112,14 @@ export function shouldExpandTool(
   output: unknown,
 ): boolean {
   if (status === "failed") return true;
-  return status === "ok" && isRecord(output) && AUTO_EXPAND.has(name);
+  return status === "ok" && isRecord(output) && autoExpand.has(name);
 }
 
-function formatMoney(value: number): string {
-  return `¥${Math.round(value).toLocaleString("zh-CN")}`;
-}
+// ---------------------------------------------------------------------------
+// 内置通用工具的摘要(nicekit/agent/builtin_tools.py 的输出结构)
+// ---------------------------------------------------------------------------
 
-function validationIssueCount(value: unknown): number {
-  if (!isRecord(value)) return 0;
-  return ["blocking_issues", "need_human_confirm", "warnings"].reduce(
-    (total, key) => total + (Array.isArray(value[key]) ? value[key].length : 0),
-    0,
-  );
-}
-
-export function toolResultSummary(name: string, output: unknown): string {
-  if (!isRecord(output)) {
-    if (typeof output === "string" && output.trim()) return output.trim();
-    return "已完成";
-  }
-
+function builtinSummary(name: string, output: UnknownRecord): string | null {
   // 子 agent 委派:摘要给"派了谁 + 跑了几轮",结论正文在展开区里
   if (name === "Agent") {
     const agent = readString(output, "agent");
@@ -116,66 +129,15 @@ export function toolResultSummary(name: string, output: unknown): string {
     return turns === undefined ? `${who}已完成` : `${who}${turns} 轮完成`;
   }
 
-  if (name === "project_create") {
-    const title = readString(output, "title");
-    return title ? `已创建「${title}」` : "旅行计划已创建";
-  }
-
-  if (name === "demand_parse") {
-    const parsed = readRecord(output, "parsed");
-    const destinations = readStringArray(parsed?.destinations);
-    const missing = readStringArray(output.missing_fields).length;
-    const scope = destinations.length
-      ? destinations.slice(0, 2).join("、")
-      : "需求";
-    return missing ? `${scope} · ${missing} 项待补充` : `${scope} · 信息完整`;
-  }
-
-  if (name === "kb_retrieve") {
-    const count = countRecordValues(output.counts);
-    if (output.empty === true || count === 0) return "暂无匹配资料";
-    return `${count} 条可用资料`;
+  if (name === "kb_search") {
+    const hits = readRecordArray(output.hits).length;
+    return hits ? `${hits} 条命中` : "未命中知识";
   }
 
   if (name === "kb_image_inspect") {
     return readString(readRecord(output, "inspection"), "description")
       ? "已核验来源原图"
       : "图片核验完成";
-  }
-
-  if (name === "business_media_select") {
-    const count = Array.isArray(output.selected_kb_media)
-      ? output.selected_kb_media.length
-      : 0;
-    return count ? `已选择 ${count} 张知识图片` : "已清除知识图片";
-  }
-
-  if (name === "itinerary_generate") {
-    const options = readRecord(output, "options");
-    const count =
-      readNumber(output, "option_count") ??
-      readRecordArray(options?.options).length;
-    return count ? `已生成 ${count} 套方案` : "行程方案已生成";
-  }
-
-  if (name === "quote_generate") {
-    const totals = readRecord(output, "totals");
-    const perPerson = readNumber(totals, "per_person");
-    const itemCount = readNumber(output, "item_count");
-    const segments = [
-      perPerson === undefined ? null : `${formatMoney(perPerson)}/人`,
-      itemCount === undefined ? null : `${itemCount} 项成本`,
-    ].filter(Boolean);
-    return segments.length ? segments.join(" · ") : "报价草稿已生成";
-  }
-
-  if (name === "render_generate") {
-    const kind = readString(output, "kind");
-    const status = readString(output, "status");
-    const label = kind ? (DOCUMENT_LABELS[kind] ?? kind) : "文档";
-    return status === "success" || status === "downloaded"
-      ? `${label}已生成`
-      : `${label} · ${status ?? "任务已创建"}`;
   }
 
   if (name === "web_search") {
@@ -211,13 +173,31 @@ export function toolResultSummary(name: string, output: unknown): string {
       : "未生成图片";
   }
 
+  return null;
+}
+
+/** 兜底:任何 JSON 输出都能给出一行可读摘要,绝不返回空白。 */
+export function genericJsonSummary(output: UnknownRecord): string {
   const items = Array.isArray(output.items) ? output.items.length : undefined;
   if (items !== undefined) return `${items} 项结果`;
   const total = readNumber(output, "total");
   if (total !== undefined) return `${total} 项结果`;
-  const issues = validationIssueCount(output.validation);
-  if (issues > 0) return `完成 · ${issues} 项需关注`;
-  return readString(output, "status") ?? "已完成";
+  const count = readNumber(output, "count");
+  if (count !== undefined) return `${count} 项结果`;
+  const status = readString(output, "status");
+  if (status) return status;
+  const keys = Object.keys(output);
+  if (!keys.length) return "已完成";
+  return `${keys.length} 个字段`;
 }
 
-export { DOCUMENT_LABELS };
+export function toolResultSummary(name: string, output: unknown): string {
+  if (!isRecord(output)) {
+    if (typeof output === "string" && output.trim()) return output.trim();
+    return "已完成";
+  }
+  // 宿主注册优先:宿主既能给自己的工具写摘要,也能改写内置文案
+  const custom = summarizers.get(name)?.(output);
+  if (custom) return custom;
+  return builtinSummary(name, output) ?? genericJsonSummary(output);
+}

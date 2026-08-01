@@ -52,7 +52,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
 import type {
   BatchResult,
@@ -60,8 +60,6 @@ import type {
   FactClaimEvidence,
   FactClaimReview,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
-
 type ReviewStatus = "suggested" | "orphaned";
 type ReviewAction = "confirm" | "reject";
 

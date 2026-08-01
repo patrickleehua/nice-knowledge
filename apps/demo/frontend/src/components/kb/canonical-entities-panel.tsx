@@ -41,20 +41,29 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { errMsg } from "@/lib/utils";
-import type { CanonicalEntity } from "@/lib/types";
+import type { CanonicalEntity, EntityType } from "@/lib/types";
 
+// 归一实体的 entity_type 是自由字符串(后端 CanonicalEntityOut.entity_type:str),
+// 取值就是已注册的实体类型 key。词表走 /kb/entity-types 下发,查不到回落原值 ——
+// TF 那份写死的五个旅游类型在 SDK 里没有对应表。
 const ALL_TYPES = "__all__";
-const ENTITY_TYPES = [
-  { value: "destination", label: "目的地" },
-  { value: "hotel", label: "酒店" },
-  { value: "cost", label: "成本项" },
-  { value: "poi", label: "景点" },
-  { value: "route_template", label: "线路模板" },
-] as const;
+const FALLBACK_TYPE_KEY = "concept";
 
-const TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  ENTITY_TYPES.map(({ value, label }) => [value, label]),
-);
+/**
+ * 实体类型词表:`{type_key: display_name}`。注册表拉不到时给一个只含
+ * `concept`(SDK 唯一内置兜底类型)的最小词表,页面照常可用。
+ */
+function useEntityTypeOptions(): Record<string, string> {
+  const types = useQuery({
+    queryKey: ["kb-entity-types"],
+    queryFn: () => api.get<EntityType[]>("/kb/entity-types"),
+    staleTime: 5 * 60 * 1000,
+  });
+  if (!types.data?.length) return { [FALLBACK_TYPE_KEY]: FALLBACK_TYPE_KEY };
+  return Object.fromEntries(
+    types.data.map((type) => [type.type_key, type.display_name]),
+  );
+}
 
 type EntityFormState = {
   entity: CanonicalEntity | null;
@@ -98,8 +107,12 @@ function canonicalEntitiesKey(kbId: string) {
   return ["kb-canonical-entities", kbId] as const;
 }
 
-function entityTypeLabel(entityType: string): string {
-  return TYPE_LABELS[entityType] ?? entityType;
+/** 查不到展示名就回显 type_key 原值(宿主刚注册的类型也不会渲染成空白)。 */
+function entityTypeLabel(
+  entityType: string,
+  labels: Record<string, string>,
+): string {
+  return labels[entityType] ?? entityType;
 }
 
 function governanceStatus(entity: CanonicalEntity) {
@@ -158,6 +171,7 @@ function EntityFormDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
+  const typeOptions = useEntityTypeOptions();
   const isEditing = form?.entity !== null;
   let metadataError = "";
   if (form) {
@@ -219,9 +233,7 @@ function EntityFormDialog({
             </FormField>
             <FormField label="实体类型" htmlFor="canonical-type" required>
               <Select
-                items={Object.fromEntries(
-                  ENTITY_TYPES.map(({ value, label }) => [value, label]),
-                )}
+                items={typeOptions}
                 value={form.entityType}
                 disabled={isEditing}
                 onValueChange={(value) =>
@@ -232,7 +244,7 @@ function EntityFormDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ENTITY_TYPES.map(({ value, label }) => (
+                  {Object.entries(typeOptions).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
                       {label}
                     </SelectItem>
@@ -280,6 +292,7 @@ function EntityFormDialog({
 }
 
 export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
+  const typeOptions = useEntityTypeOptions();
   const queryClient = useQueryClient();
   const [queryDraft, setQueryDraft] = useState("");
   const [query, setQuery] = useState("");
@@ -380,12 +393,7 @@ export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
   const mergeTarget = mergeCandidates.find(
     (entity) => entity.id === mergeState?.targetId,
   );
-  const typeItems = {
-    [ALL_TYPES]: "全部类型",
-    ...Object.fromEntries(
-      ENTITY_TYPES.map(({ value, label }) => [value, label]),
-    ),
-  };
+  const typeItems = { [ALL_TYPES]: "全部类型", ...typeOptions };
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -396,7 +404,10 @@ export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
     setForm({
       entity: null,
       name: "",
-      entityType: entityType === ALL_TYPES ? "hotel" : entityType,
+      entityType:
+        entityType === ALL_TYPES
+          ? (Object.keys(typeOptions)[0] ?? FALLBACK_TYPE_KEY)
+          : entityType,
       metadata: "{}",
     });
   }
@@ -469,7 +480,7 @@ export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_TYPES}>全部类型</SelectItem>
-            {ENTITY_TYPES.map(({ value, label }) => (
+            {Object.entries(typeOptions).map(([value, label]) => (
               <SelectItem key={value} value={value}>
                 {label}
               </SelectItem>
@@ -507,7 +518,7 @@ export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
                         {entity.canonical_name}
                       </h3>
                       <Badge variant="secondary">
-                        {entityTypeLabel(entity.entity_type)}
+                        {entityTypeLabel(entity.entity_type, typeOptions)}
                       </Badge>
                       <ToneBadge tone={governance.tone}>
                         {governance.label}
@@ -719,7 +730,10 @@ export function CanonicalEntitiesPanel({ kbId }: { kbId: string }) {
                       {suggestion.target_entity.canonical_name}
                     </span>
                     <Badge variant="secondary">
-                      {entityTypeLabel(suggestion.source_entity.entity_type)}
+                      {entityTypeLabel(
+                        suggestion.source_entity.entity_type,
+                        typeOptions,
+                      )}
                     </Badge>
                     <Badge
                       variant={

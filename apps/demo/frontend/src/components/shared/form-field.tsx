@@ -3,7 +3,7 @@
  *
  * @example
  * ```tsx
- * <FormField label="旅行计划名称" htmlFor="name" required error={errors.name?.message}>
+ * <FormField label="知识库名称" htmlFor="name" required error={errors.name?.message}>
  *   <Input id="name" {...register("name")} aria-invalid={!!errors.name} />
  * </FormField>
  * ```

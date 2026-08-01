@@ -13,9 +13,7 @@
 import { CircleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
+import { cn, errMsg } from "@/lib/utils";
 export function ErrorState({
   error,
   onRetry,

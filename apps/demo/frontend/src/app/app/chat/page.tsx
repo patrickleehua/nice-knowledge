@@ -1,21 +1,23 @@
 "use client";
 
+// Agent 全交互工作台。
+//
+// SDK 化改造(MIGRATION-PLAN §5.8):
+// - 删掉"旅行计划模式 / 通用模式"双模开关与 ProjectPicker。会话与宿主业务对象
+//   的联系统一走 `scope_type` + `scope_id`(chat_sessions 的两列,无 FK),从
+//   URL query 读入;两者必须成对,只给一个后端直接 422。
+// - `stage.update` 事件已从后端删除(不再按工具名前缀推导业务阶段)。
+// - 工具结果渲染走可注册的渲染器表(components/agent/result-renderers.tsx)。
+// - 输入队列缓存与权限延迟应用拆成两个 hook(use-queued-inputs /
+//   use-deferred-permission),这里只剩 SSE 状态机与页面装配。
+
 import {
   useMutation,
   useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import {
-  CircleSlash,
-  Clock3,
-  FolderOpen,
-  Loader2,
-  PanelLeftOpen,
-  Pencil,
-  Sparkles,
-  Trash2,
-} from "lucide-react";
+import { Loader2, PanelLeftOpen } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -24,18 +26,22 @@ import { CommandInput } from "@/components/agent/command-input";
 import { ConfirmCard } from "@/components/agent/confirm-card";
 import { GoalBanner } from "@/components/agent/goal-banner";
 import { PlanChecklist } from "@/components/agent/plan-checklist";
-import { ProjectPicker } from "@/components/agent/project-picker";
 import { PermissionControl } from "@/components/agent/permission-control";
+import { QueuedInputList } from "@/components/agent/queued-input-list";
+import { hasToolResultRenderer } from "@/components/agent/result-renderers";
 import { RuntimeControls } from "@/components/agent/runtime-controls";
 import { SessionSidebar } from "@/components/agent/session-sidebar";
-import { businessResultKind } from "@/components/agent/tool-presentation";
+import { useDeferredPermission } from "@/components/agent/use-deferred-permission";
+import {
+  setQueuedCache,
+  useQueuedInputs,
+  type QueueEvent,
+} from "@/components/agent/use-queued-inputs";
 import { UserInputCard } from "@/components/agent/user-input-card";
 import { ShellHeader } from "@/components/shell/app-shell";
 import { Breadcrumbs } from "@/components/shared";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
-import { PLAN_LABEL } from "@/lib/entity-label";
 import {
   historyToItems,
   isSemanticAgentEvent,
@@ -43,12 +49,9 @@ import {
 } from "@/lib/agent-events";
 import { useMounted } from "@/lib/auth";
 import { preserveSelectedSession } from "@/lib/chat-session-state";
-import {
-  deferPermissionUpdate,
-  rebasePermissionUpdate,
-  type DeferredSessionPermissionUpdate,
-  type SessionPermissionState,
-  type SessionPermissionUpdate,
+import type {
+  SessionPermissionState,
+  SessionPermissionUpdate,
 } from "@/lib/agent-permissions";
 import { confirmationKey } from "@/lib/approval-decisions";
 import {
@@ -56,13 +59,11 @@ import {
   cancelSessionGoal,
   completeSessionGoal,
   type ConfirmationAction,
-  deleteQueuedInput,
   getSessionGoal,
   isConfirmationAction,
   listQueuedInputs,
   sendChatMessage,
   setSessionGoal,
-  updateQueuedInput,
   type AgentCardOut,
   type AgentEvent,
   type ChatMessageOut,
@@ -73,7 +74,6 @@ import {
   type PlanStep,
   type QueuedAck,
   type QueuedInputListOut,
-  type QueuedInputOut,
   type ReviewerOverride,
   type RuntimeToolsOut,
   type SessionGoalDetailOut,
@@ -83,9 +83,6 @@ import {
   type WebSearchOptionsOut,
 } from "@/lib/chat";
 import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
-type Mode = "project" | "general";
 
 interface RecentTurn {
   id: string;
@@ -98,33 +95,12 @@ interface RecentTurn {
   events: AgentEvent[];
 }
 
-interface DeferredPermissionChange {
-  sessionId: string;
-  update: DeferredSessionPermissionUpdate;
-}
-
 interface QueuedConfirmation {
   action: ConfirmationAction;
   key: string;
 }
 
 const SESSION_NAV_PREFERENCE_KEY = "chat-session-nav-collapsed";
-
-/**
- * 服务端队列缓存的唯一写入口:202 回执、SSE input.* 事件、编辑/删除都走这里。
- * 放在组件外:React Compiler 无法为组件内的高阶更新函数保留手动 memo
- * (react-hooks/preserve-manual-memoization),模块级纯函数不参与编译。
- */
-function setQueuedCache(
-  queryClient: QueryClient,
-  sid: string,
-  updater: (items: QueuedInputOut[]) => QueuedInputOut[],
-) {
-  queryClient.setQueryData<QueuedInputListOut>(
-    ["chat-queued-inputs", sid],
-    (data) => ({ items: updater(data?.items ?? []) }),
-  );
-}
 
 function removeSessionFromLists(queryClient: QueryClient, sessionId: string) {
   queryClient.setQueriesData<ChatSessionListOut>(
@@ -144,10 +120,13 @@ function ChatWorkbench() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const mounted = useMounted();
-  const mode: Mode = params.get("mode") === "general" ? "general" : "project";
-  const projectId = mode === "project" ? params.get("project_id") : null;
-  // 从客户详情页带入:新建的会话直接绑客户(售前咨询,未立项也沉淀客户记忆)
-  const customerId = params.get("customer_id");
+  // 宿主作用域:两者要么同时给(scoped 会话),要么都不给(general 会话)。
+  // 只给一个视为都没给——后端对半截 scope 直接 422,不如在前端就归一。
+  const rawScopeType = params.get("scope_type");
+  const rawScopeId = params.get("scope_id");
+  const scoped = !!rawScopeType && !!rawScopeId;
+  const scopeType = scoped ? rawScopeType : null;
+  const scopeId = scoped ? rawScopeId : null;
   const sessionId = params.get("session");
   const [draft, setDraft] = useState("");
   const [optimisticUser, setOptimisticUser] = useState<{
@@ -156,11 +135,6 @@ function ChatWorkbench() {
   } | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [recentTurns, setRecentTurns] = useState<RecentTurn[]>([]);
-  // 服务端排队卡片的行内编辑态(运行中输入队列,见 lib/chat.ts QueuedInputOut)
-  const [editingQueued, setEditingQueued] = useState<{
-    id: string;
-    content: string;
-  } | null>(null);
   const [running, setRunning] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -171,7 +145,7 @@ function ChatWorkbench() {
       localStorage.getItem(SESSION_NAV_PREFERENCE_KEY) !== "false",
   );
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
-  // 思考等级(Codex 式随时可调):档位表由后端配置下发,localStorage 记住偏好;
+  // 思考等级(随时可调):档位表由后端配置下发,localStorage 记住偏好;
   // 偏好失效(档位表变更)或未设置时回退后端默认档
   const [thinkingPick, setThinkingPick] = useState<string | null>(() =>
     typeof window === "undefined"
@@ -233,8 +207,6 @@ function ChatWorkbench() {
   );
   const [decisionSubmitting, setDecisionSubmitting] = useState(false);
   const [userInputSubmitting, setUserInputSubmitting] = useState(false);
-  const [deferredPermission, setDeferredPermission] =
-    useState<DeferredPermissionChange | null>(null);
   const [pendingSession, setPendingSession] = useState(sessionId);
   const abortRef = useRef<AbortController | null>(null);
   const runIdRef = useRef<string | null>(null);
@@ -249,10 +221,11 @@ function ChatWorkbench() {
   const startingRef = useRef(false);
   const followOutputRef = useRef(true);
   const queuedConfirmationRef = useRef<QueuedConfirmation | null>(null);
-  const deferredPermissionRef = useRef<DeferredPermissionChange | null>(null);
-  const permissionApplyingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const queue = useQueuedInputs(sessionId);
+  const permissionIntent = useDeferredPermission();
 
   // 切换会话时同步丢弃上一会话的瞬时审批/下一轮权限意图。
   if (pendingSession !== sessionId) {
@@ -262,47 +235,40 @@ function ChatWorkbench() {
     setDismissedPendingKey(null);
     setDecisionSubmitting(false);
     setUserInputSubmitting(false);
-    setDeferredPermission(null);
+    permissionIntent.reset();
   }
 
-  function replaceDeferredPermission(next: DeferredPermissionChange | null) {
-    deferredPermissionRef.current = next;
-    setDeferredPermission(next);
-  }
-
-  function go(next: {
-    mode: Mode;
-    projectId?: string | null;
-    session?: string | null;
-  }) {
-    const contextChanged =
-      next.mode !== mode ||
-      (next.mode === "project" ? (next.projectId ?? null) : null) !==
-        projectId ||
-      (next.session ?? null) !== sessionId;
+  function go(next: { session?: string | null }) {
+    const contextChanged = (next.session ?? null) !== sessionId;
     if (!running && contextChanged) {
       activeRunSessionRef.current = next.session ?? null;
       followOutputRef.current = true;
-      setEditingQueued(null);
+      queue.setEditing(null);
     }
     const qs = new URLSearchParams();
-    qs.set("mode", next.mode);
-    if (next.mode === "project" && next.projectId)
-      qs.set("project_id", next.projectId);
+    if (scopeType && scopeId) {
+      qs.set("scope_type", scopeType);
+      qs.set("scope_id", scopeId);
+    }
     if (next.session) qs.set("session", next.session);
-    router.replace(`/app/chat?${qs.toString()}`);
+    const query = qs.toString();
+    router.replace(query ? `/app/chat?${query}` : "/app/chat");
   }
 
-  // 旅行计划模式必须先选旅行计划;通用模式的会话都不绑旅行计划
-  const ready = mode === "general" || !!projectId;
-  const sessionQueryKey = ["chat-sessions", mode, projectId] as const;
+  const sessionQueryKey = ["chat-sessions", scopeType, scopeId] as const;
   const sessions = useQuery({
     queryKey: sessionQueryKey,
     queryFn: async () => {
+      // scope=general 只列未绑作用域的会话;给了 scope_id 则只列绑到该作用域的
+      const search = new URLSearchParams({ page_size: "50" });
+      if (scopeType && scopeId) {
+        search.set("scope_type", scopeType);
+        search.set("scope_id", scopeId);
+      } else {
+        search.set("scope", "general");
+      }
       const refreshed = await api.get<ChatSessionListOut>(
-        mode === "general"
-          ? "/chat/sessions?page_size=50&scope=general"
-          : `/chat/sessions?page_size=50&project_id=${projectId}`,
+        `/chat/sessions?${search.toString()}`,
       );
       return preserveSelectedSession(
         queryClient.getQueryData<ChatSessionListOut>(sessionQueryKey),
@@ -310,7 +276,6 @@ function ChatWorkbench() {
         sessionId,
       );
     },
-    enabled: ready,
   });
   const cards = useQuery({
     queryKey: ["agent-cards"],
@@ -327,7 +292,6 @@ function ChatWorkbench() {
           ? `/chat/runtime-tools?agent_card_id=${selectedAgentCardId}`
           : "/chat/runtime-tools",
       ),
-    enabled: ready,
     staleTime: 5 * 60 * 1000,
   });
   // 刻意不落 localStorage:临时工具的语义就是"这一条消息",记住偏好会让它
@@ -340,7 +304,7 @@ function ChatWorkbench() {
     queryKey: ["chat-messages", sessionId],
     queryFn: () =>
       api.get<ChatMessageOut[]>(`/chat/sessions/${sessionId}/messages`),
-    enabled: !!sessionId && ready,
+    enabled: !!sessionId,
   });
   useEffect(() => {
     if (
@@ -350,23 +314,21 @@ function ChatWorkbench() {
     )
       return;
     removeSessionFromLists(queryClient, sessionId);
-    const qs = new URLSearchParams({ mode });
-    if (mode === "project" && projectId) qs.set("project_id", projectId);
-    router.replace(`/app/chat?${qs.toString()}`);
-  }, [messages.error, sessionId, mode, projectId, queryClient, router]);
+    router.replace("/app/chat");
+  }, [messages.error, sessionId, queryClient, router]);
   const permissions = useQuery({
     queryKey: ["chat-permissions", sessionId],
     queryFn: () =>
       api.get<SessionPermissionState>(
         `/chat/sessions/${sessionId}/permissions`,
       ),
-    enabled: !!sessionId && ready,
+    enabled: !!sessionId,
   });
   // 服务端排队中的运行输入(重进会话时恢复遗留队列;实时状态由 202 回执与 SSE 维护)
   const queuedInputs = useQuery({
     queryKey: ["chat-queued-inputs", sessionId],
     queryFn: () => listQueuedInputs(sessionId as string),
-    enabled: !!sessionId && ready,
+    enabled: !!sessionId,
   });
   const queuedItems = queuedInputs.data?.items ?? [];
   // 会话目标:目标 active 时后台会自动续跑(没有面向本客户端的 SSE),
@@ -374,7 +336,7 @@ function ChatWorkbench() {
   const sessionGoal = useQuery({
     queryKey: ["chat-goal", sessionId],
     queryFn: () => getSessionGoal(sessionId as string),
-    enabled: !!sessionId && ready,
+    enabled: !!sessionId,
     refetchInterval: (query) =>
       query.state.data?.goal?.status === "active" ? 10000 : false,
   });
@@ -418,27 +380,27 @@ function ChatWorkbench() {
         ? allMessages
         : allMessages.slice(0, historyCount);
     const result = historyToItems(persistedMessages);
-    const persistedBusinessResults = new Map<string, ConversationItem>();
+    // 有专属渲染器的工具结果:落库版优先于直播版(内容一致但带权威 id)
+    const persistedToolResults = new Map<string, ConversationItem>();
     if (historyCount !== undefined) {
       for (const message of allMessages.slice(historyCount)) {
         if (
           message.role !== "tool" ||
           !message.run_id ||
           !message.tool_call_id ||
-          businessResultKind(message.tool_name ?? "", message.tool_output) ===
-            null
+          !hasToolResultRenderer(message.tool_name ?? "", message.tool_output)
         )
           continue;
         const item = historyToItems([message])[0];
         if (item)
-          persistedBusinessResults.set(
-            `${message.run_id}\u0000${message.tool_call_id}`,
+          persistedToolResults.set(
+            `${message.run_id} ${message.tool_call_id}`,
             { ...item, resultOnly: true },
           );
       }
     }
     const addedPersistedResults = new Set<string>();
-    const appendPersistedBusinessResults = (
+    const appendPersistedToolResults = (
       runId: string | null,
       turnEvents: AgentEvent[],
     ) => {
@@ -447,11 +409,11 @@ function ChatWorkbench() {
         if (
           event.type !== "tool.result" ||
           !event.ok ||
-          businessResultKind(event.name, event.output) === null
+          !hasToolResultRenderer(event.name, event.output)
         )
           continue;
-        const identity = `${runId}\u0000${event.tool_call_id}`;
-        const persisted = persistedBusinessResults.get(identity);
+        const identity = `${runId} ${event.tool_call_id}`;
+        const persisted = persistedToolResults.get(identity);
         if (persisted && !addedPersistedResults.has(identity)) {
           result.push(persisted);
           addedPersistedResults.add(identity);
@@ -475,7 +437,7 @@ function ChatWorkbench() {
         createdAt: turn.startedAt,
         completedAt: turn.completedAt,
       });
-      appendPersistedBusinessResults(turn.runId, turn.events);
+      appendPersistedToolResults(turn.runId, turn.events);
     }
     if (optimisticUser)
       result.push({
@@ -494,7 +456,7 @@ function ChatWorkbench() {
         events,
         createdAt: runStartedAt,
       });
-    if (events.length) appendPersistedBusinessResults(activeRunId, events);
+    if (events.length) appendPersistedToolResults(activeRunId, events);
     return result;
   }, [
     messages.data,
@@ -512,20 +474,22 @@ function ChatWorkbench() {
   }, [items, running, plan, pending]);
   useEffect(() => {
     queuedConfirmationRef.current = null;
-    deferredPermissionRef.current = null;
   }, [sessionId]);
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  const sessionScopeBody = scoped
+    ? { scope_type: scopeType, scope_id: scopeId }
+    : {};
 
   const createSession = useMutation({
     mutationFn: (nextAgentCardId?: string) =>
       api.post<ChatSessionOut>("/chat/sessions", {
         agent_card_id: nextAgentCardId,
-        project_id: projectId,
-        customer_id: customerId,
+        ...sessionScopeBody,
       }),
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      go({ mode, projectId, session: session.id });
+      go({ session: session.id });
     },
     onError: (error) => toast.error(errMsg(error, "创建会话失败")),
   });
@@ -535,33 +499,13 @@ function ChatWorkbench() {
       toast.success("会话已删除");
       removeSessionFromLists(queryClient, id);
       queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-      if (id === sessionId) go({ mode, projectId });
+      if (id === sessionId) go({});
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409)
         toast.error("会话有任务在执行，先停止再删除");
       else toast.error(errMsg(error, "删除失败"));
     },
-  });
-  const updatePermissions = useMutation({
-    mutationFn: ({
-      sessionId: targetSessionId,
-      update,
-    }: {
-      sessionId: string;
-      update: SessionPermissionUpdate;
-    }) => {
-      return api.put<SessionPermissionState>(
-        `/chat/sessions/${targetSessionId}/permissions`,
-        update,
-      );
-    },
-    onSuccess: (state) => {
-      queryClient.setQueryData(["chat-permissions", state.session_id], state);
-      queryClient.invalidateQueries({ queryKey: ["chat-sessions"] });
-    },
-    onError: (error) =>
-      toast.error(errMsg(error, "权限设置未更新，请刷新后重试")),
   });
   const revokeGrant = useMutation({
     mutationFn: (grantId: string) =>
@@ -610,51 +554,8 @@ function ChatWorkbench() {
     },
     onError: (error) => toast.error(errMsg(error, "标记目标完成失败")),
   });
-  const patchQueuedInput = useMutation({
-    mutationFn: ({ inputId, content }: { inputId: string; content: string }) =>
-      updateQueuedInput(sessionId as string, inputId, content),
-    onSuccess: (item) => {
-      if (sessionId)
-        setQueuedCache(queryClient, sessionId, (items) =>
-          items.map((it) => (it.id === item.id ? item : it)),
-        );
-      setEditingQueued(null);
-    },
-    onError: (error) => {
-      // 409 = 消息已被消费/跳过,不再是可编辑态,以服务端为准刷新
-      if (error instanceof ApiError && error.status === 409) {
-        toast.message("该消息已被处理");
-        queryClient.invalidateQueries({
-          queryKey: ["chat-queued-inputs", sessionId],
-        });
-        setEditingQueued(null);
-      } else toast.error(errMsg(error, "修改排队消息失败"));
-    },
-  });
-  const removeQueuedInput = useMutation({
-    mutationFn: (inputId: string) =>
-      deleteQueuedInput(sessionId as string, inputId),
-    onSuccess: (_data, inputId) => {
-      if (sessionId)
-        setQueuedCache(queryClient, sessionId, (items) =>
-          items.filter((it) => it.id !== inputId),
-        );
-    },
-    onError: (error) => {
-      if (error instanceof ApiError && error.status === 409) {
-        toast.message("该消息已被处理");
-        queryClient.invalidateQueries({
-          queryKey: ["chat-queued-inputs", sessionId],
-        });
-      } else toast.error(errMsg(error, "删除排队消息失败"));
-    },
-  });
 
-  async function authoritativeRefresh(
-    sid: string,
-    pid?: string | null,
-    includeMessages = true,
-  ) {
+  async function authoritativeRefresh(sid: string, includeMessages = true) {
     await Promise.all([
       ...(includeMessages
         ? [
@@ -669,16 +570,6 @@ function ChatWorkbench() {
             queryClient.invalidateQueries({
               queryKey: ["chat-permissions", sid],
             }),
-          ]
-        : []),
-      ...(pid
-        ? [
-            queryClient.invalidateQueries({ queryKey: ["project", pid] }),
-            queryClient.invalidateQueries({ queryKey: ["itinerary", pid] }),
-            queryClient.invalidateQueries({ queryKey: ["quote", pid] }),
-            queryClient.invalidateQueries({ queryKey: ["pipelines", pid] }),
-            queryClient.invalidateQueries({ queryKey: ["render-jobs", pid] }),
-            queryClient.invalidateQueries({ queryKey: ["ota-compare", pid] }),
           ]
         : []),
     ]);
@@ -722,49 +613,12 @@ function ChatWorkbench() {
 
   async function requestPermissionUpdate(update: SessionPermissionUpdate) {
     if (!sessionId) throw new Error("请先创建会话");
-    const state =
-      queryClient.getQueryData<SessionPermissionState>([
-        "chat-permissions",
-        sessionId,
-      ]) ?? permissions.data;
-    if (!state) throw new Error("权限状态尚未加载");
-    const intent = deferPermissionUpdate(update);
-    if (running || pending || state.active_run || decisionSubmitting) {
-      replaceDeferredPermission({ sessionId, update: intent });
-      return;
-    }
-    await updatePermissions.mutateAsync({
+    await permissionIntent.request(
       sessionId,
-      update: rebasePermissionUpdate(state, intent),
-    });
-  }
-
-  async function flushDeferredPermission(sid: string): Promise<boolean> {
-    const deferred = deferredPermissionRef.current;
-    if (
-      !deferred ||
-      deferred.sessionId !== sid ||
-      permissionApplyingRef.current
-    )
-      return false;
-    const state = queryClient.getQueryData<SessionPermissionState>([
-      "chat-permissions",
-      sid,
-    ]);
-    if (!state || state.active_run || state.pending_decision) return false;
-
-    permissionApplyingRef.current = true;
-    try {
-      await updatePermissions.mutateAsync({
-        sessionId: sid,
-        update: rebasePermissionUpdate(state, deferred.update),
-      });
-      return true;
-    } finally {
-      permissionApplyingRef.current = false;
-      if (deferredPermissionRef.current === deferred)
-        replaceDeferredPermission(null);
-    }
+      update,
+      running || !!pending || decisionSubmitting,
+      permissions.data,
+    );
   }
 
   /**
@@ -800,64 +654,17 @@ function ChatWorkbench() {
     setOptimisticUser({ content: nextUserContent, createdAt: now });
   }
 
-  function receiveQueueEvent(
-    event: Extract<AgentEvent, { type: `input.${string}` }>,
-  ) {
-    const sid = activeRunSessionRef.current ?? sessionId;
-    if (!sid) return;
-    if (event.type === "input.consumed") {
-      setQueuedCache(queryClient, sid, (items) =>
-        items.filter((item) => item.id !== event.queued_input_id),
-      );
-      sealLiveSegment(event.content);
-      return;
-    }
-    if (event.type === "input.skipped") {
-      setQueuedCache(queryClient, sid, (items) =>
-        items.map((item) =>
-          item.id === event.queued_input_id
-            ? { ...item, status: "skipped" as const }
-            : item,
-        ),
-      );
-      return;
-    }
-    if (event.type === "input.deleted") {
-      setQueuedCache(queryClient, sid, (items) =>
-        items.filter((item) => item.id !== event.queued_input_id),
-      );
-      return;
-    }
-    if (event.type === "input.queued" || event.type === "input.updated") {
-      // 常态由 202 回执 / 编辑响应维护;这里兜底断线重放时的状态同步
-      setQueuedCache(queryClient, sid, (items) => {
-        const next = items.filter((item) => item.id !== event.queued_input_id);
-        if (event.status === "queued")
-          next.push({
-            id: event.queued_input_id,
-            run_id: event.run_id,
-            position: event.position,
-            status: "queued",
-            content: event.content,
-            consumed_message_id: null,
-            created_at: null,
-            updated_at: null,
-          });
-        return next.sort((left, right) => left.position - right.position);
-      });
-    }
-    // input.consuming:卡片保留,待 input.consumed 时转正式 user 气泡
-  }
-
   function receive(event: AgentEvent) {
     maxSeqRef.current = Math.max(maxSeqRef.current, event.seq);
     // Primary Agent UX renders complete loop steps, not transport token deltas.
     if (!isSemanticAgentEvent(event)) return;
     if (event.type.startsWith("input.")) {
       // 队列事件驱动排队卡片与运行段封存,不进运行卡时间线
-      receiveQueueEvent(
-        event as Extract<AgentEvent, { type: `input.${string}` }>,
-      );
+      const sid = activeRunSessionRef.current ?? sessionId;
+      if (!sid) return;
+      const consumed = queue.receiveQueueEvent(sid, event as QueueEvent);
+      if (consumed && event.type === "input.consumed")
+        sealLiveSegment(event.content);
       return;
     }
     if (event.type === "runtime.tools") {
@@ -875,12 +682,6 @@ function ChatWorkbench() {
     if (eventsRef.current.some((item) => item.seq === event.seq)) return;
     eventsRef.current = [...eventsRef.current, event];
     setEvents(eventsRef.current);
-    if (event.type === "stage.update")
-      void authoritativeRefresh(
-        activeRunSessionRef.current ?? sessionId ?? "",
-        event.project_id,
-        false,
-      );
     if (
       event.type === "approval.bundle.requested" ||
       event.type === "approval.bundle.updated"
@@ -931,6 +732,11 @@ function ChatWorkbench() {
     }
   }
 
+  const messageContext =
+    scopeType && scopeId
+      ? { scope_type: scopeType, scope_id: scopeId }
+      : undefined;
+
   async function executeTurn(
     sid: string,
     content: string,
@@ -954,7 +760,7 @@ function ChatWorkbench() {
       await sendChatMessage(
         sid,
         content,
-        projectId ? { project_id: projectId } : undefined,
+        messageContext,
         receive,
         (runId) => {
           runIdRef.current = runId;
@@ -995,7 +801,7 @@ function ChatWorkbench() {
       } else if (!controller.signal.aborted)
         toast.error(errMsg(error, "发送失败"));
     } finally {
-      await authoritativeRefresh(sid, projectId, false);
+      await authoritativeRefresh(sid, false);
       syncLivePendingFromCache(sid);
       syncLiveUserInputFromCache(sid);
       const turnEvents = eventsRef.current;
@@ -1099,7 +905,7 @@ function ChatWorkbench() {
 
         if (!turnCompleted) break;
         try {
-          await flushDeferredPermission(sid);
+          await permissionIntent.flush(sid);
         } catch {
           // Mutation owner already surfaced the authoritative save error.
         }
@@ -1144,7 +950,7 @@ function ChatWorkbench() {
       await sendChatMessage(
         sid,
         content,
-        projectId ? { project_id: projectId } : undefined,
+        messageContext,
         (event) => collected.push(event),
         (runId) => {
           raceRunId = runId;
@@ -1202,13 +1008,13 @@ function ChatWorkbench() {
           events: collected,
         },
       ]);
-      await authoritativeRefresh(sid, projectId, false);
+      await authoritativeRefresh(sid, false);
     }
   }
 
   async function send() {
     const content = draft.trim();
-    if (!content || !ready) return;
+    if (!content) return;
     if (pendingUserInput) {
       toast.message("请先完成上方问题");
       return;
@@ -1230,10 +1036,10 @@ function ChatWorkbench() {
       try {
         const session = await api.post<ChatSessionOut>("/chat/sessions", {
           agent_card_id: agentCardId,
-          project_id: projectId,
+          ...sessionScopeBody,
         });
         sid = session.id;
-        go({ mode, projectId, session: sid });
+        go({ session: sid });
       } catch (error) {
         toast.error(errMsg(error, "创建会话失败"));
         startingRef.current = false;
@@ -1291,7 +1097,7 @@ function ChatWorkbench() {
   }
 
   async function generateImageAgain(message: string) {
-    if (!sessionId || !ready) return;
+    if (!sessionId) return;
     if (pendingUserInput) {
       toast.message("请先完成上方问题");
       return;
@@ -1310,7 +1116,7 @@ function ChatWorkbench() {
 
   // 展示计划不是可执行流水线，因此这里只发结构化“继续处理”控制动作。
   async function continuePlanStep(step: PlanStep) {
-    if (!sessionId || !ready || running) return;
+    if (!sessionId || running) return;
     if (pendingUserInput || pending) {
       toast.message("请先处理当前待交互内容");
       return;
@@ -1332,7 +1138,7 @@ function ChatWorkbench() {
   function pickAgent(nextAgentCardId: string | undefined) {
     if (nextAgentCardId === selectedAgentCardId) return;
     setAgentCardId(nextAgentCardId);
-    if (sessionId) go({ mode, projectId });
+    if (sessionId) go({});
   }
 
   function openSession(nextSessionId: string) {
@@ -1340,36 +1146,8 @@ function ChatWorkbench() {
       (item) => item.id === nextSessionId,
     );
     if (nextSession) setAgentCardId(nextSession.agent_card_id);
-    go({ mode, projectId, session: nextSessionId });
+    go({ session: nextSessionId });
   }
-
-  const modeSwitcher = (
-    <div className="flex items-center gap-0.5 rounded-full bg-black/[0.045] p-1 ring-1 ring-inset ring-black/[0.045] dark:bg-white/[0.07] dark:ring-white/[0.045]">
-      {(
-        [
-          { key: "project", label: `${PLAN_LABEL}模式`, icon: FolderOpen },
-          { key: "general", label: "通用模式", icon: Sparkles },
-        ] as const
-      ).map((item) => (
-        <button
-          key={item.key}
-          type="button"
-          disabled={running}
-          onClick={() => mode !== item.key && go({ mode: item.key })}
-          className={cn(
-            "flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 sm:px-3.5",
-            mode === item.key
-              ? "bg-white font-medium shadow-xs dark:bg-[#2a2a28]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <item.icon className="size-3.5" />
-          <span>{item.key === "project" ? PLAN_LABEL : "通用"}</span>
-          <span className="hidden sm:inline">模式</span>
-        </button>
-      ))}
-    </div>
-  );
 
   const composerToolbar = (
     <RuntimeControls
@@ -1393,12 +1171,8 @@ function ChatWorkbench() {
       state={permissions.data}
       loading={permissions.isLoading}
       disabled={running}
-      pending={updatePermissions.isPending || revokeGrant.isPending}
-      deferredUpdate={
-        deferredPermission?.sessionId === sessionId
-          ? deferredPermission.update
-          : null
-      }
+      pending={permissionIntent.saving || revokeGrant.isPending}
+      deferredUpdate={permissionIntent.deferredFor(sessionId)}
       onUpdate={async (update) => {
         await requestPermissionUpdate(update);
       }}
@@ -1442,267 +1216,131 @@ function ChatWorkbench() {
           <div className="hidden min-w-0 lg:block">
             <Breadcrumbs
               items={[
-                { label: "工作台", href: "/app/projects" },
+                { label: "工作台", href: "/app/chat" },
                 { label: "AI 助手" },
               ]}
             />
           </div>
-          <div className="justify-self-center">{modeSwitcher}</div>
+          <div className="justify-self-center">
+            {scoped && (
+              <span className="rounded-full bg-black/[0.045] px-3 py-1.5 text-xs text-muted-foreground ring-1 ring-inset ring-black/[0.045] dark:bg-white/[0.07] dark:ring-white/[0.045]">
+                作用域 {scopeType} · {scopeId}
+              </span>
+            )}
+          </div>
           <div className="hidden lg:block" aria-hidden="true" />
         </div>
       </ShellHeader>
       <div className="h-[calc(100dvh-5rem)] sm:h-[calc(100dvh-6.5rem)]">
         <div className="flex h-full min-h-0 overflow-hidden bg-[#f7f7f5] dark:bg-[#191918]">
-          {!ready ? (
-            <div className="flex-1 overflow-y-auto">
-              <ProjectPicker
-                onPick={(project) =>
-                  go({ mode: "project", projectId: project.id })
+          <SessionSidebar
+            scopeLabel={scoped ? `${scopeType} 会话` : "通用会话"}
+            sessions={sessions.data?.items}
+            activeSessionId={sessionId}
+            collapsed={mounted && sessionNavCollapsed}
+            mobileOpen={mobileSessionsOpen}
+            disabled={running || createSession.isPending}
+            onCollapsedChange={pickSessionNavCollapsed}
+            onMobileOpenChange={setMobileSessionsOpen}
+            onCreate={() => createSession.mutate(selectedAgentCardId)}
+            onSelect={openSession}
+            onDelete={(id) => deleteSession.mutateAsync(id)}
+          />
+          <main className="flex min-w-0 flex-1 flex-col bg-[#f7f7f5] dark:bg-[#191918]">
+            <div className="flex h-11 shrink-0 items-center gap-2 px-3 sm:px-4">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="md:hidden"
+                onClick={() => setMobileSessionsOpen(true)}
+                aria-label="打开会话列表"
+                title="会话"
+              >
+                <PanelLeftOpen className="size-4" />
+              </Button>
+              <span className="truncate text-sm font-medium tracking-tight">
+                {current?.title ?? "通用助手"}
+              </span>
+              {running && (
+                <Loader2 className="ml-auto size-3.5 animate-spin text-primary" />
+              )}
+            </div>
+            {sessionId && (
+              <GoalBanner
+                goal={goal}
+                disabled={running}
+                busy={
+                  saveGoal.isPending ||
+                  dropGoal.isPending ||
+                  finishGoal.isPending
+                }
+                onSubmit={async (body) => {
+                  await saveGoal.mutateAsync(body);
+                }}
+                onCancel={async () => {
+                  await dropGoal.mutateAsync();
+                }}
+                onComplete={async () => {
+                  await finishGoal.mutateAsync();
+                }}
+              />
+            )}
+            <div
+              ref={scrollRef}
+              data-conversation-scroll
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                followOutputRef.current =
+                  element.scrollHeight -
+                    element.scrollTop -
+                    element.clientHeight <
+                  96;
+              }}
+              className="min-h-0 flex-1 overflow-y-auto bg-[#f7f7f5] dark:bg-[#191918]"
+            >
+              <AgentConversation
+                items={items}
+                running={running}
+                liveStartedAt={runStartedAt}
+                scopeType={scopeType}
+                scopeId={scopeId}
+                pending={pending}
+                reviewerOverrides={permissions.data?.reviewer_overrides ?? []}
+                onPreset={setDraft}
+                onOverride={(override) => void applyReviewerOverride(override)}
+                onAdjustImage={adjustGeneratedImage}
+                onGenerateImageAgain={(message) =>
+                  void generateImageAgain(message)
                 }
               />
+              <QueuedInputList items={queuedItems} queue={queue} />
             </div>
-          ) : (
-            <>
-              <SessionSidebar
-                scopeLabel={mode === "general" ? "通用会话" : "本旅行计划会话"}
-                sessions={sessions.data?.items}
-                activeSessionId={sessionId}
-                collapsed={mounted && sessionNavCollapsed}
-                mobileOpen={mobileSessionsOpen}
-                disabled={running || createSession.isPending}
-                onCollapsedChange={pickSessionNavCollapsed}
-                onMobileOpenChange={setMobileSessionsOpen}
-                onCreate={() => createSession.mutate(selectedAgentCardId)}
-                onSelect={openSession}
-                onDelete={(id) => deleteSession.mutateAsync(id)}
-              />
-              <main className="flex min-w-0 flex-1 flex-col bg-[#f7f7f5] dark:bg-[#191918]">
-                <div className="flex h-11 shrink-0 items-center gap-2 px-3 sm:px-4">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="md:hidden"
-                    onClick={() => setMobileSessionsOpen(true)}
-                    aria-label="打开会话列表"
-                    title="会话"
-                  >
-                    <PanelLeftOpen className="size-4" />
-                  </Button>
-                  <span className="truncate text-sm font-medium tracking-tight">
-                    {current?.title ??
-                      (mode === "general" ? "通用助手" : "旅行计划工作台")}
-                  </span>
-                  {running && (
-                    <Loader2 className="ml-auto size-3.5 animate-spin text-primary" />
-                  )}
-                </div>
-                {sessionId && (
-                  <GoalBanner
-                    goal={goal}
-                    disabled={running}
-                    busy={
-                      saveGoal.isPending ||
-                      dropGoal.isPending ||
-                      finishGoal.isPending
-                    }
-                    onSubmit={async (body) => {
-                      await saveGoal.mutateAsync(body);
-                    }}
-                    onCancel={async () => {
-                      await dropGoal.mutateAsync();
-                    }}
-                    onComplete={async () => {
-                      await finishGoal.mutateAsync();
-                    }}
-                  />
-                )}
-                <div
-                  ref={scrollRef}
-                  data-conversation-scroll
-                  onScroll={(event) => {
-                    const element = event.currentTarget;
-                    followOutputRef.current =
-                      element.scrollHeight -
-                        element.scrollTop -
-                        element.clientHeight <
-                      96;
-                  }}
-                  className="min-h-0 flex-1 overflow-y-auto bg-[#f7f7f5] dark:bg-[#191918]"
-                >
-                  <AgentConversation
-                    items={items}
-                    running={running}
-                    liveStartedAt={runStartedAt}
-                    mode={mode}
-                    projectId={projectId ?? undefined}
-                    pending={pending}
-                    reviewerOverrides={
-                      permissions.data?.reviewer_overrides ?? []
-                    }
-                    onPreset={setDraft}
-                    onOverride={(override) =>
-                      void applyReviewerOverride(override)
-                    }
-                    onAdjustImage={adjustGeneratedImage}
-                    onGenerateImageAgain={(message) =>
-                      void generateImageAgain(message)
-                    }
-                  />
-                  {queuedItems.length > 0 && (
-                    <div className="mx-auto w-full max-w-[50rem] px-4 pb-6 sm:px-6">
-                      <div className="space-y-2" aria-label="排队中的消息">
-                        {queuedItems.map((item) => (
-                          <div
-                            key={item.id}
-                            className={cn(
-                              "rounded-xl border px-3.5 py-2.5 text-sm",
-                              item.status === "skipped"
-                                ? "border-dashed border-border/70 opacity-70"
-                                : "border-border/80 bg-white dark:bg-[#232321]",
-                            )}
-                          >
-                            {editingQueued?.id === item.id ? (
-                              <div className="space-y-2">
-                                <Textarea
-                                  value={editingQueued.content}
-                                  onChange={(event) =>
-                                    setEditingQueued({
-                                      id: item.id,
-                                      content: event.target.value,
-                                    })
-                                  }
-                                  rows={2}
-                                  autoFocus
-                                />
-                                <div className="flex justify-end gap-2">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => setEditingQueued(null)}
-                                  >
-                                    取消
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    disabled={
-                                      !editingQueued.content.trim() ||
-                                      patchQueuedInput.isPending
-                                    }
-                                    onClick={() =>
-                                      patchQueuedInput.mutate({
-                                        inputId: item.id,
-                                        content: editingQueued.content.trim(),
-                                      })
-                                    }
-                                  >
-                                    保存
-                                  </Button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex items-start gap-2.5">
-                                <span className="mt-1 shrink-0 text-muted-foreground">
-                                  {item.status === "skipped" ? (
-                                    <CircleSlash className="size-3.5" />
-                                  ) : (
-                                    <Clock3 className="size-3.5" />
-                                  )}
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                  <p className="leading-6 break-words whitespace-pre-wrap">
-                                    {item.content}
-                                  </p>
-                                  <p className="mt-0.5 text-xs text-muted-foreground">
-                                    {item.status === "skipped"
-                                      ? "已跳过 · 本轮已终止，该消息未发送"
-                                      : "排队中 · Agent 空闲时自动发送"}
-                                  </p>
-                                </div>
-                                <div className="flex shrink-0 items-center gap-1">
-                                  {item.status === "queued" && (
-                                    <Button
-                                      type="button"
-                                      size="icon-sm"
-                                      variant="ghost"
-                                      aria-label="编辑排队消息"
-                                      title="编辑"
-                                      onClick={() =>
-                                        setEditingQueued({
-                                          id: item.id,
-                                          content: item.content,
-                                        })
-                                      }
-                                    >
-                                      <Pencil className="size-3.5" />
-                                    </Button>
-                                  )}
-                                  <Button
-                                    type="button"
-                                    size="icon-sm"
-                                    variant="ghost"
-                                    aria-label="删除排队消息"
-                                    title="删除"
-                                    onClick={() => {
-                                      if (item.status === "queued")
-                                        removeQueuedInput.mutate(item.id);
-                                      else if (sessionId)
-                                        // 已跳过项只是本地提示,直接从卡片区移除
-                                        setQueuedCache(
-                                          queryClient,
-                                          sessionId,
-                                          (items) =>
-                                            items.filter(
-                                              (it) => it.id !== item.id,
-                                            ),
-                                        );
-                                    }}
-                                  >
-                                    <Trash2 className="size-3.5" />
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <CommandInput
-                  value={draft}
-                  onChange={setDraft}
-                  above={composerDock}
-                  toolbar={pendingUserInput ? undefined : composerToolbar}
-                  actions={pendingUserInput ? undefined : composerActions}
-                  onProject={(project) =>
-                    !running && go({ mode: "project", projectId: project.id })
-                  }
-                  placeholder={
-                    pendingUserInput
-                      ? "请先完成上方问题"
-                      : pending && !running
-                        ? "有待确认操作：直接发消息视为不批准"
-                        : mode === "general"
-                          ? "搜索知识、创建旅行计划或处理跨旅行计划任务…"
-                          : "继续补充要求，或让 Agent 推进行程、报价与交付…"
-                  }
-                  queuedTurns={[]}
-                  running={running}
-                  disabled={!!pendingUserInput}
-                  onSubmit={() => void send()}
-                  onStop={() => void stop()}
-                  onQueuedEdit={() => {}}
-                  onQueuedMove={() => {}}
-                  onQueuedRemove={() => {}}
-                  onQueuedRun={() => {}}
-                  inputRef={composerRef}
-                />
-              </main>
-            </>
-          )}
+            <CommandInput
+              value={draft}
+              onChange={setDraft}
+              above={composerDock}
+              toolbar={pendingUserInput ? undefined : composerToolbar}
+              actions={pendingUserInput ? undefined : composerActions}
+              placeholder={
+                pendingUserInput
+                  ? "请先完成上方问题"
+                  : pending && !running
+                    ? "有待确认操作：直接发消息视为不批准"
+                    : "问点什么,或让助手检索知识、联网调研、安排定时任务…"
+              }
+              queuedTurns={[]}
+              running={running}
+              disabled={!!pendingUserInput}
+              onSubmit={() => void send()}
+              onStop={() => void stop()}
+              onQueuedEdit={() => {}}
+              onQueuedMove={() => {}}
+              onQueuedRemove={() => {}}
+              onQueuedRun={() => {}}
+              inputRef={composerRef}
+            />
+          </main>
         </div>
       </div>
     </>

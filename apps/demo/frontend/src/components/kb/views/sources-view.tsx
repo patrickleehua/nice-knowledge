@@ -46,10 +46,11 @@ import {
 } from "@/components/kb/document-intake-panel";
 import { DocDetail } from "@/components/kb/doc-detail";
 import {
-  canRequestRouteReclassification,
-  routeReclassificationStatus,
+  canReclassifyDocument,
+  reclassificationStatus,
+  retryTargetDocType,
   shouldPollReclassification,
-} from "@/components/kb/route-ingestion";
+} from "@/components/kb/reclassification";
 import {
   documentUploadPreflight,
   SUPPORTED_DOCUMENT_SUFFIXES,
@@ -99,9 +100,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
 import { useCurrentOrg } from "@/lib/auth";
 import { elapsedSecondsSince, formatDuration } from "@/lib/duration";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
-import { cn } from "@/lib/utils";
 import {
   DOC_TYPES,
   type BatchResult,
@@ -607,6 +607,7 @@ export function SourcesView({ kbId }: { kbId: string }) {
   // 强制清理:blocker 全部属于可跳过类时管理员可勾选跳过
   const [purgeForce, setPurgeForce] = useState(false);
   const [checkingPurgeId, setCheckingPurgeId] = useState<string | null>(null);
+  const [reclassifyTarget, setReclassifyTarget] = useState("");
   const [reclassifyDoc, setReclassifyDoc] = useState<SourceDocument | null>(
     null,
   );
@@ -685,10 +686,11 @@ export function SourcesView({ kbId }: { kbId: string }) {
     if (!requestedDocument) return;
     handledReclassificationId.current = requestedReclassificationId;
     set({ reclassify: null });
-    if (canRequestRouteReclassification(requestedDocument)) {
+    if (canReclassifyDocument(requestedDocument)) {
       setReclassifyDoc(requestedDocument);
+      setReclassifyTarget(retryTargetDocType(requestedDocument) ?? "");
     } else {
-      toast.error("这份文档当前不能重新抽取为线路知识");
+      toast.error("这份文档当前不能重新抽取");
     }
   }, [docs, requestedReclassificationId, set]);
   const settingsQuery = useQuery({
@@ -714,6 +716,10 @@ export function SourcesView({ kbId }: { kbId: string }) {
         label: entityType.display_name,
       })),
   ];
+  // doc_type / target_doc_type 都是开放字符串:查不到展示名就回落 key 原值
+  const docTypeLabel = (typeKey: string) =>
+    documentTypeOptions.find((option) => option.value === typeKey)?.label ??
+    typeKey;
   const historyQuery = useQuery({
     queryKey: ["kb-doc-revisions", historyDoc?.id],
     queryFn: () =>
@@ -885,15 +891,23 @@ export function SourcesView({ kbId }: { kbId: string }) {
     onError: (error) => toast.error(errMsg(error)),
   });
 
+  // 目标类型开放:内置 DocType + 任意已注册实体类型 key(后端 _resolve_doc_type)
   const reclassifyDocument = useMutation({
-    mutationFn: (document: SourceDocument) =>
+    mutationFn: ({
+      document,
+      targetDocType,
+    }: {
+      document: SourceDocument;
+      targetDocType: string;
+    }) =>
       api.post<DocumentReclassificationAccepted>(
         `/kb/documents/${document.id}/reclassify`,
-        { target_doc_type: "route_template" },
+        { target_doc_type: targetDocType },
       ),
     onSuccess: async () => {
       setReclassifyDoc(null);
-      toast.success("线路知识抽取已排队；完成后仍需审核并发布新快照");
+      setReclassifyTarget("");
+      toast.success("二次抽取已排队；完成后仍需审核并发布新快照");
       await invalidateDocs();
     },
     onError: (error) => toast.error(errMsg(error)),
@@ -1791,8 +1805,10 @@ export function SourcesView({ kbId }: { kbId: string }) {
                 ) : (
                   (() => {
                     const d = row.doc;
-                    const reclassificationStatus =
-                      routeReclassificationStatus(d);
+                    const reclassifyStatus = reclassificationStatus(
+                      d,
+                      docTypeLabel,
+                    );
                     return (
                       <div
                         className={cn(
@@ -1964,16 +1980,21 @@ export function SourcesView({ kbId }: { kbId: string }) {
                                   重新摄入
                                 </DropdownMenuItem>
                               )}
-                              {canRequestRouteReclassification(d) && (
+                              {canReclassifyDocument(d) && (
                                 <DropdownMenuItem
                                   disabled={reclassifyDocument.isPending}
-                                  onClick={() => setReclassifyDoc(d)}
+                                  onClick={() => {
+                                    setReclassifyDoc(d);
+                                    setReclassifyTarget(
+                                      retryTargetDocType(d) ?? "",
+                                    );
+                                  }}
                                 >
                                   <RotateCcw />
                                   {d.latest_reclassification?.status ===
                                   "failed"
-                                    ? "重试线路知识抽取"
-                                    : "抽取为线路知识"}
+                                    ? "重试二次抽取"
+                                    : "重新抽取为…"}
                                 </DropdownMenuItem>
                               )}
                               {canRetryWithdrawalOperation(d) && (
@@ -2056,15 +2077,15 @@ export function SourcesView({ kbId }: { kbId: string }) {
                             </p>
                           </div>
                         )}
-                        {reclassificationStatus && (
+                        {reclassifyStatus && (
                           <p
                             className={cn(
                               "mt-1 text-[11px] text-muted-foreground",
-                              reclassificationStatus.failed &&
+                              reclassifyStatus.failed &&
                                 "text-destructive",
                             )}
                           >
-                            {reclassificationStatus.text}
+                            {reclassifyStatus.text}
                           </p>
                         )}
                         {d.latest_operation &&
@@ -2123,21 +2144,46 @@ export function SourcesView({ kbId }: { kbId: string }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>抽取为线路知识？</AlertDialogTitle>
+            <AlertDialogTitle>重新抽取这份文档？</AlertDialogTitle>
             <AlertDialogDescription>
               系统会复用「{reclassifyDoc?.filename}
-              」最新修订的解析产物，不会重新上传、改写源文件或改变当前已发布快照。新线路事实仍需审核并发布新快照后才会生效。
+              」最新修订的解析产物，不会重新上传、改写源文件或改变当前已发布快照。新抽取出的事实仍需审核并发布新快照后才会生效。
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <label className="space-y-1.5 px-1 text-xs font-medium">
+            目标抽取类型
+            <select
+              value={reclassifyTarget}
+              disabled={
+                reclassifyDocument.isPending ||
+                !!retryTargetDocType(reclassifyDoc ?? ({} as SourceDocument))
+              }
+              onChange={(event) => setReclassifyTarget(event.target.value)}
+              className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <option value="">选择类型…</option>
+              {documentTypeOptions
+                .filter((option) => option.value !== "unclassified")
+                .map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+            </select>
+          </label>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={reclassifyDocument.isPending}>
               取消
             </AlertDialogCancel>
             <AlertDialogAction
-              disabled={reclassifyDocument.isPending}
+              disabled={reclassifyDocument.isPending || !reclassifyTarget}
               onClick={(event) => {
                 event.preventDefault();
-                if (reclassifyDoc) reclassifyDocument.mutate(reclassifyDoc);
+                if (reclassifyDoc && reclassifyTarget)
+                  reclassifyDocument.mutate({
+                    document: reclassifyDoc,
+                    targetDocType: reclassifyTarget,
+                  });
               }}
             >
               {reclassifyDocument.isPending && (
@@ -2496,7 +2542,7 @@ export function SourcesView({ kbId }: { kbId: string }) {
                         />
                         <span>
                           跳过以上 {purgePreview.blockers.length}{" "}
-                          类拦截立即清理(含保留期等待);引用这些内容的快照、行程与报价会出现死链,
+                          类拦截立即清理(含保留期等待);引用这些内容的快照与外部业务对象会出现死链,
                           删除后无法恢复。
                         </span>
                       </label>

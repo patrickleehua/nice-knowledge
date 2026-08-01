@@ -8,7 +8,7 @@
  * // 非受控:传 trigger
  * <ConfirmDialog
  *   trigger={<Button variant="destructive">删除</Button>}
- *   title="删除该旅行计划?"
+ *   title="删除该知识库?"
  *   description="删除后不可恢复。"
  *   destructive
  *   onConfirm={() => deleteMutation.mutateAsync()}

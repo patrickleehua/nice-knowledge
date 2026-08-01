@@ -119,7 +119,7 @@ const ENTITY_TYPES: EntityType[] = [
   {
     id: "et-builtin-1",
     type_key: "attraction",
-    display_name: "景点",
+    display_name: "概念",
     description: null,
     field_schema: {
       type: "object",
@@ -135,8 +135,8 @@ const ENTITY_TYPES: EntityType[] = [
   {
     id: "et-own-1",
     type_key: "visa_policy",
-    display_name: "签证政策",
-    description: "各国签证要求",
+    display_name: "报销政策",
+    description: "各类报销口径",
     field_schema: {
       type: "object",
       properties: { name: { type: "string" } },
@@ -274,7 +274,7 @@ describe("SettingsView tab layout", () => {
     expect(screen.getByRole("button", { name: "新建类型" })).toBeDefined();
     // 内置与自建类型都按行渲染
     expect(await screen.findByText("visa_policy")).toBeDefined();
-    expect(screen.getByText("景点")).toBeDefined();
+    expect(screen.getByText("概念")).toBeDefined();
     expect(screen.getByText("自建")).toBeDefined();
     expect(screen.getByText("内置")).toBeDefined();
   });

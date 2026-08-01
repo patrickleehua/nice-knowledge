@@ -7,17 +7,17 @@
 
 import {
   GRAPH_PALETTE_FALLBACK,
+  GRAPH_TYPE_TOKEN_CYCLE,
   GRAPH_TYPE_TOKENS,
+  graphTypeToken,
 } from "@/components/kb/graph-colors";
 
-/** 节点类型中文标签(在 graph-canvas 基础上补 route / document) */
+/**
+ * 内置节点类型的中文标签。其余节点类型是自由字符串(entity_type_key),
+ * 展示名由调用方查 `/kb/entity-types` 注册表解析,查不到回落 key 原值
+ * (见 panels.tsx::typeLabel)。
+ */
 export const GRAPH_TYPE_LABELS: Record<string, string> = {
-  destination: "目的地",
-  hotel: "酒店",
-  cost: "成本",
-  poi: "景点",
-  route_template: "线路",
-  route: "线路",
   page: "Wiki 页",
   document: "文档",
 };
@@ -53,8 +53,10 @@ const TOKEN_FALLBACK: Record<string, string> = {
 };
 
 export interface SigmaGraphPalette {
-  /** 节点类型 → 实色 */
+  /** 内置节点类型 → 实色 */
   types: Record<string, string>;
+  /** 轮换色板(token → 实色),自由类型按 type_key 稳定哈希取色 */
+  cycle: Record<string, string>;
   fallbackType: string;
   /** 社区着色轮换色板(16 色,超出取模) */
   communities: string[];
@@ -117,9 +119,13 @@ function buildPalette(read: (token: string, fallback: string) => string): SigmaG
   for (const [type, token] of Object.entries(GRAPH_TYPE_TOKENS)) {
     types[type] = read(token, GRAPH_PALETTE_FALLBACK.types[type] ?? mutedForeground);
   }
-  // 扩展类型:route 与 route_template 同义;document 由 chart-5 向前景混合衍生(区别于 page)
-  types.route = types.route_template;
+  // document 由 page 色向前景混合衍生(区别于 page 本身)
   types.document = mixHex(types.page ?? mutedForeground, foreground, 0.45);
+  // 自由类型(entity_type_key)按稳定哈希落到轮换色板
+  const cycle: Record<string, string> = {};
+  for (const token of GRAPH_TYPE_TOKEN_CYCLE) {
+    cycle[token] = readToken(token);
+  }
 
   const baseCommunity = COMMUNITY_TOKENS.map(readToken);
   const communities = [
@@ -129,6 +135,7 @@ function buildPalette(read: (token: string, fallback: string) => string): SigmaG
 
   return {
     types,
+    cycle,
     fallbackType: mutedForeground,
     communities,
     edgeStrong: withAlpha(primary, 0.75),
@@ -155,5 +162,17 @@ export function readSigmaPalette(): SigmaGraphPalette {
   const style = getComputedStyle(document.documentElement);
   return buildPalette(
     (token, fallback) => style.getPropertyValue(token).trim() || fallback,
+  );
+}
+
+/** 任意节点类型的实色:内置类型直取,自由类型按 type_key 稳定哈希轮换取色。 */
+export function sigmaTypeColor(
+  palette: SigmaGraphPalette,
+  type: string,
+): string {
+  return (
+    palette.types[type] ??
+    palette.cycle[graphTypeToken(type)] ??
+    palette.fallbackType
   );
 }

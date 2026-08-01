@@ -37,9 +37,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { errMsg, fmtDateTime } from "@/lib/utils";
+import { cn, errMsg, fmtDateTime } from "@/lib/utils";
 import type { PromptDto, PromptWithCatalogDto } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { CopyTextButton } from "./copy-text-button";
 import { PromptCatalogEntryEditor } from "./prompt-catalog-entry-editor";
 import {
@@ -758,7 +757,7 @@ export function PromptRegistryTab() {
                       id="prompt-task"
                       value={editor.task}
                       onChange={(e) => setEditor({ ...editor, task: e.target.value })}
-                      placeholder="如:kb.extract.hotel / my.custom.task"
+                      placeholder="如:kb.extract.generic / my.custom.task"
                       className="font-mono"
                     />
                     {editor.task.trim() && !builtinTasks.has(editor.task.trim()) && (

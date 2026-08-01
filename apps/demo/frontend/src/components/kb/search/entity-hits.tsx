@@ -1,121 +1,90 @@
-// 知识实体区(KB-4 检索页上区):结构化命中按 kind 分组的紧凑卡片网格。
-// 区块高度封顶 23rem 内部独立滚动(llm_wiki 图片区同款手法)。
+"use client";
 
-import {
-  Bed,
-  BookOpen,
-  Boxes,
-  Map,
-  MapPin,
-  Receipt,
-  Route,
-  type LucideIcon,
-} from "lucide-react";
+// 知识实体区(检索页上区):结构化命中按类型分组的紧凑卡片网格。
+// 区块高度封顶 23rem 内部独立滚动。
+//
+// SDK 化改造(MIGRATION-PLAN §5.8):TF 按五个旅游 kind 各写一段字段摘要。
+// 后端现在的 `hit.kind` 就是 `entity_type_key`(自由字符串,见
+// nicekit/kb/search.py:1307)或内置的 `page`,因此这里统一走**通用 attributes
+// 摘要**:展示名查 `/kb/entity-types` 注册表,查不到回落 type_key 原值。
+
+import { useQuery } from "@tanstack/react-query";
+import { BookOpen, Boxes, type LucideIcon } from "lucide-react";
 import { LayerBadge } from "@/components/kb/badges";
 import {
   SearchCitationDetails,
   SearchScoreDetails,
 } from "@/components/kb/search/hit-metadata";
 import { ToneBadge } from "@/components/shared";
-import type { SearchHit } from "@/lib/types";
+import { api } from "@/lib/api";
+import type { EntityType, SearchHit } from "@/lib/types";
 
-// 后端 kind 现值为 route_template(search.py),规格口径为 route,两者归一渲染
-const KIND_META: Record<string, { label: string; icon: LucideIcon }> = {
-  destination: { label: "目的地", icon: Map },
-  poi: { label: "景点", icon: MapPin },
-  hotel: { label: "酒店", icon: Bed },
-  cost: { label: "成本参考", icon: Receipt },
-  route: { label: "成熟线路", icon: Route },
+/** 内置 kind(非实体类型):wiki 页。其余一律按实体类型注册表解析。 */
+const BUILTIN_KIND_META: Record<string, { label: string; icon: LucideIcon }> = {
   page: { label: "知识页", icon: BookOpen },
 };
 
-const KIND_ORDER = ["destination", "poi", "hotel", "cost", "route", "page"];
-
-function normalizeKind(kind: string): string {
-  return kind === "route_template" ? "route" : kind;
-}
-
-function str(v: unknown): string | null {
-  return typeof v === "string" && v ? v : null;
-}
-
-function num(v: unknown): number | null {
-  return typeof v === "number" ? v : null;
-}
-
-/** 各 kind 的关键字段摘要(缺失字段静默跳过,不编造) */
-function summary(kind: string, data: Record<string, unknown>): string {
-  const parts: string[] = [];
-  switch (kind) {
-    case "destination":
-      if (str(data.country)) parts.push(String(data.country));
-      break;
-    case "poi":
-      if (str(data.city)) parts.push(String(data.city));
-      if (str(data.poi_type)) parts.push(String(data.poi_type));
-      if (num(data.visit_minutes) !== null)
-        parts.push(`${data.visit_minutes} 分钟`);
-      if (str(data.ticket_info)) parts.push(String(data.ticket_info));
-      break;
-    case "hotel":
-      if (str(data.city)) parts.push(String(data.city));
-      if (str(data.star)) parts.push(String(data.star));
-      if (num(data.price_ref) !== null)
-        parts.push(
-          `参考价 ${data.price_ref} ${str(data.currency) ?? ""}`.trim(),
-        );
-      break;
-    case "cost": {
-      if (str(data.category)) parts.push(String(data.category));
-      // 后端字段为 unit_cost(search.py),兼容规格口径 unit_price
-      const price = num(data.unit_price) ?? num(data.unit_cost);
-      if (price !== null)
-        parts.push(
-          `${price} ${str(data.currency) ?? ""}${str(data.unit) ? ` / ${data.unit}` : ""}`.trim(),
-        );
-      if (str(data.valid_to)) parts.push(`有效期至 ${data.valid_to}`);
-      break;
-    }
-    case "route":
-      if (num(data.days) !== null) parts.push(`${data.days} 天`);
-      break;
-    case "page":
-      if (str(data.page_type)) parts.push(String(data.page_type));
-      break;
-    default:
-      // M3a 自定义类型:attributes 键值对通用摘要(跳过标识与已单独渲染的字段)
-      for (const [k, v] of Object.entries(data)) {
-        if (parts.length >= 4) break;
-        if (GENERIC_SKIP_KEYS.has(k) || v === null || v === undefined || v === "") {
-          continue;
-        }
-        const text = typeof v === "object" ? JSON.stringify(v) : String(v);
-        parts.push(`${k}: ${text.length > 32 ? `${text.slice(0, 32)}…` : text}`);
-      }
-      break;
-  }
-  return parts.join(" · ");
-}
-
-// 通用摘要跳过的字段:标识类 + 标题类 + 已单独渲染的 stale
+// 通用摘要跳过的字段:标识类 + 标题类 + 已单独渲染的字段
 const GENERIC_SKIP_KEYS = new Set([
   "name",
   "id",
   "entity_type_key",
   "title",
   "stale",
+  "snapshot_id",
+  "must_include_hit",
+  "content",
 ]);
 
-function EntityCard({ hit }: { hit: SearchHit }) {
-  const kind = normalizeKind(hit.kind);
-  const meta = KIND_META[kind];
-  const Icon = meta?.icon ?? Boxes;
-  const name = str(hit.data.name) ?? str(hit.data.title) ?? "(未命名)";
-  const detail = summary(kind, hit.data);
+const MAX_SUMMARY_PARTS = 4;
+const MAX_VALUE_CHARS = 32;
+
+/**
+ * 通用 attributes 摘要:按字段顺序取前几项 `键: 值`。
+ * 缺失字段静默跳过,不编造;长值截断。
+ */
+export function genericEntitySummary(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(data)) {
+    if (parts.length >= MAX_SUMMARY_PARTS) break;
+    if (
+      GENERIC_SKIP_KEYS.has(key) ||
+      value === null ||
+      value === undefined ||
+      value === ""
+    )
+      continue;
+    const text =
+      typeof value === "object" ? JSON.stringify(value) : String(value);
+    parts.push(
+      `${key}: ${text.length > MAX_VALUE_CHARS ? `${text.slice(0, MAX_VALUE_CHARS)}…` : text}`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+function summary(kind: string, data: Record<string, unknown>): string {
+  // wiki 页的正文不适合当键值对摊开,只给页面类型
+  if (kind === "page") {
+    return typeof data.page_type === "string" ? data.page_type : "";
+  }
+  return genericEntitySummary(data);
+}
+
+function EntityCard({ hit, label }: { hit: SearchHit; label: string }) {
+  const Icon = BUILTIN_KIND_META[hit.kind]?.icon ?? Boxes;
+  const name =
+    (typeof hit.data.name === "string" && hit.data.name) ||
+    (typeof hit.data.title === "string" && hit.data.title) ||
+    "(未命名)";
+  const detail = summary(hit.kind, hit.data);
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-3">
       <div className="flex items-start gap-2">
-        <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <Icon
+          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+          aria-label={label}
+        />
         <span className="min-w-0 truncate text-sm font-medium" title={name}>
           {name}
         </span>
@@ -140,16 +109,22 @@ function EntityCard({ hit }: { hit: SearchHit }) {
 }
 
 export function EntityHits({ hits }: { hits: SearchHit[] }) {
-  // 未知 kind(M3a 自定义类型)按出现顺序追加在内置分组之后,不再丢弃
-  const extraKinds = [
-    ...new Set(hits.map((h) => normalizeKind(h.kind))),
-  ].filter((k) => !KIND_ORDER.includes(k));
-  const groups = [...KIND_ORDER, ...extraKinds]
-    .map((kind) => ({
-      kind,
-      hits: hits.filter((h) => normalizeKind(h.kind) === kind),
-    }))
-    .filter((g) => g.hits.length > 0);
+  // 类型展示名来自注册表;失败/未命中时回落 type_key,不隐藏命中
+  const entityTypes = useQuery({
+    queryKey: ["kb-entity-types"],
+    queryFn: () => api.get<EntityType[]>("/kb/entity-types"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const labelOf = (kind: string) =>
+    BUILTIN_KIND_META[kind]?.label ??
+    entityTypes.data?.find((type) => type.type_key === kind)?.display_name ??
+    kind;
+
+  // 分组顺序 = 命中出现顺序(检索排序已经表达了相关性,不再另定优先级)
+  const kinds = [...new Set(hits.map((hit) => hit.kind))];
+  const groups = kinds
+    .map((kind) => ({ kind, hits: hits.filter((hit) => hit.kind === kind) }))
+    .filter((group) => group.hits.length > 0);
 
   return (
     <section className="space-y-3">
@@ -164,11 +139,15 @@ export function EntityHits({ hits }: { hits: SearchHit[] }) {
         {groups.map((group) => (
           <div key={group.kind} className="space-y-2">
             <p className="text-xs font-medium text-muted-foreground">
-              {KIND_META[group.kind]?.label ?? group.kind} · {group.hits.length}
+              {labelOf(group.kind)} · {group.hits.length}
             </p>
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {group.hits.map((hit) => (
-                <EntityCard key={hit.source} hit={hit} />
+                <EntityCard
+                  key={hit.source}
+                  hit={hit}
+                  label={labelOf(hit.kind)}
+                />
               ))}
             </div>
           </div>

@@ -20,19 +20,17 @@ import {
   replaceMarkdownImages,
   safeDecodeURIComponent,
 } from "@/lib/kb-images-utils.mjs";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   DocumentMarkdown,
   KbImageAsset,
   SourceDocument,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
-
 export interface PreviewAnchor {
   /** markdown 全文 1-based 行号区间(chunk 溯源锚点) */
   startLine?: number;
   endLine?: number;
-  /** 标题面包屑(如"西欧成本 > 酒店"),取最后一段匹配 h1-h6 */
+  /** 标题面包屑(如"制度汇编 > 报销"),取最后一段匹配 h1-h6 */
   headingPath?: string;
 }
 

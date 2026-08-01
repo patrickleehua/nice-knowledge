@@ -4,13 +4,32 @@
 
 import { useSyncExternalStore } from "react";
 
-export type Role =
-  | "platform_admin"
-  | "org_admin"
-  | "sales"
-  | "operator"
-  | "pricer"
-  | "reviewer";
+/**
+ * 角色是**自由字符串**,不是联合字面量。
+ *
+ * SDK 只内置三个角色(`platform_admin` / `org_admin` / `member`),宿主可以通过
+ * `register_roles()` 注册任意业务角色并直接下发到 JWT。前端如果把 Role 写成
+ * 联合类型再做穷举 switch,宿主一注册新角色就编译不过/渲染空白,因此这里刻意
+ * 保留 `string`,所有分支都必须给未知角色兜底。
+ */
+export type Role = string;
+
+/** SDK 内置角色(用于 UI 兜底文案与导航可见性,不构成穷举)。 */
+export const BUILTIN_ROLES = ["platform_admin", "org_admin", "member"] as const;
+
+export type BuiltinRole = (typeof BUILTIN_ROLES)[number];
+
+const ROLE_LABELS: Record<string, string> = {
+  platform_admin: "平台管理员",
+  org_admin: "组织管理员",
+  member: "成员",
+};
+
+/** 角色展示名;未知角色(宿主自定义)原样回显,不隐藏也不报错。 */
+export function roleLabel(role: string | null | undefined): string {
+  if (!role) return "—";
+  return ROLE_LABELS[role] ?? role;
+}
 
 export interface AuthOrg {
   id: string;
@@ -19,10 +38,10 @@ export interface AuthOrg {
   role: Role;
 }
 
-const TOKEN_COOKIE = "tf_token";
-const ROLE_COOKIE = "tf_role";
-const REFRESH_KEY = "tf_refresh";
-const ORG_KEY = "tf_org";
+const TOKEN_COOKIE = "nk_token";
+const ROLE_COOKIE = "nk_role";
+const REFRESH_KEY = "nk_refresh";
+const ORG_KEY = "nk_org";
 
 // cookie 生命周期对齐后端 refresh_token_expire_days(=7);旧值 8h 会与 15min access 错配,
 // 导致 refresh 仍有效却因 cookie 过期被踢登录。
@@ -109,8 +128,9 @@ export function useMounted(): boolean {
   );
 }
 
+/** 登录后落地页;未知角色一律回落一线工作台(与 proxy.ts 的区域守卫口径一致)。 */
 export function homeForRole(role: Role): string {
   if (role === "platform_admin") return "/admin/orgs";
   if (role === "org_admin") return "/org/kb";
-  return "/app/projects";
+  return "/app/chat";
 }

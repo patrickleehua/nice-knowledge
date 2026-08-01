@@ -6,7 +6,12 @@ import type {
   ToolCategory,
 } from "@/lib/chat";
 
-export type PermissionScope = "session" | "project" | "organization";
+/**
+ * 授权范围三档,由窄到宽。`resource` 指宿主业务作用域这一档:
+ * chat_sessions.scope_type/scope_id 指向的那个作用域根(宿主可以是工单、
+ * 案件、工作区……由 ResourceResolver 解析)。
+ */
+export type PermissionScope = "session" | "resource" | "organization";
 
 export interface PermissionProfileOption {
   id: PermissionProfile;
@@ -36,7 +41,8 @@ export interface OrganizationPermissionConstraints {
 export interface PermissionGrant {
   id: string;
   session_id: string | null;
-  project_id: string | null;
+  scope_type: string | null;
+  scope_id: string | null;
   tool_name: string | null;
   category: ToolCategory | null;
   scope: PermissionScope;
@@ -55,7 +61,8 @@ export interface SessionPermissionState {
   scope: PermissionScope;
   expires_at: string | null;
   active_run: boolean;
-  project_id: string | null;
+  scope_type: string | null;
+  scope_id: string | null;
   custom_rules: Partial<Record<ToolCategory, PermissionDecision>>;
   policy_snapshot: Record<string, unknown>;
   profile_options: PermissionProfileOption[];
@@ -113,19 +120,19 @@ export const CUSTOM_PERMISSION_GROUPS = [
   {
     id: "data_writes",
     label: "数据写入",
-    description: "创建或修改旅行计划、需求、行程与报价草稿",
+    description: "创建或修改本地业务数据(宿主注册的写工具)",
     categories: ["local_data"],
   },
   {
     id: "network_paid",
     label: "联网与付费操作",
-    description: "外部检索、OTA 比价与图片生成",
+    description: "联网搜索、网页读取与图片生成等外部调用",
     categories: ["network", "external_cost"],
   },
   {
     id: "financial",
     label: "财务变更",
-    description: "成本、报价与商业金额相关操作",
+    description: "涉及金额与计费的操作",
     categories: ["financial"],
   },
   {
@@ -137,7 +144,7 @@ export const CUSTOM_PERMISSION_GROUPS = [
   {
     id: "workflow",
     label: "流程状态",
-    description: "提交审核、回退确认与旅行计划状态推进",
+    description: "提交审核、回退确认与业务状态推进",
     categories: ["workflow"],
   },
   {
@@ -244,8 +251,8 @@ export function buildFullAccessPermissionUpdate(
 ): SessionPermissionUpdate | null {
   const scopeAllowed =
     scope === "session" ||
-    (scope === "project" &&
-      !!state.project_id &&
+    (scope === "resource" &&
+      !!state.scope_id &&
       state.organization.max_scope !== "session");
   if (
     !scopeAllowed ||

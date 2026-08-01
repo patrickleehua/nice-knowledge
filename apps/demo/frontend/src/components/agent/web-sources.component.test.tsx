@@ -90,7 +90,7 @@ test("renders web_fetch pages per status", () => {
               ref: 1,
               url: "https://gov.example.cn/a",
               final_url: "https://gov.example.cn/a?v=2",
-              title: "签证须知",
+              title: "政策须知",
               content: "第一行\n第二行\n第三行\n第四行",
               status: "ok",
               truncated: true,
@@ -128,7 +128,7 @@ test("renders web_fetch pages per status", () => {
   expect(screen.getByText("正文已截断")).toBeTruthy();
   expect(screen.getByText("已拦截：robots 不允许")).toBeTruthy();
   expect(screen.getByText("读取失败：连接超时")).toBeTruthy();
-  expect(screen.getByText("签证须知").getAttribute("href")).toBe(
+  expect(screen.getByText("政策须知").getAttribute("href")).toBe(
     "https://gov.example.cn/a?v=2",
   );
   // 正文默认只渲染前 3 行,展开后才补全(高级详情里的原始 JSON 不参与断言)。
@@ -148,7 +148,7 @@ test("citation markers jump to the matching source card", () => {
           results: [
             {
               ref: 1,
-              title: "签证指南",
+              title: "政策指南",
               url: "https://gov.example.cn/a",
               domain: "gov.example.cn",
               source_tier: "official",

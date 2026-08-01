@@ -47,8 +47,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   McpServerDto,
   McpServerStatusDto,

@@ -47,9 +47,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { formatDuration } from "@/lib/duration";
-import { fmtDateTime } from "@/lib/utils";
-import { cn } from "@/lib/utils";
-
+import { cn, fmtDateTime } from "@/lib/utils";
 type AgentRunStatus = "success" | "failed" | "waiting" | "running";
 type SnapshotFilter = "all" | "with" | "without";
 

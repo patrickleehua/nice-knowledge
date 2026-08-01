@@ -11,21 +11,21 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
-import { useState } from "react";
+import { createElement, useState } from "react";
 import Markdown from "react-markdown";
 import type { ToolRun } from "@/lib/agent-events";
 import { toolLabel, type ReviewerOverride } from "@/lib/chat";
 import { cn } from "@/lib/utils";
-import { BusinessResult } from "./business-result";
 import {
   AgentImageInspection,
   AgentKnowledgeEvidence,
 } from "./knowledge-evidence";
-import { SelectedKnowledgeMediaSection } from "@/components/projects/selected-knowledge-media";
 import { Badge } from "@/components/ui/badge";
-import type { SelectedKnowledgeMedia } from "@/lib/types";
 import {
-  businessResultKind,
+  hasToolResultRenderer,
+  useToolResultRenderer,
+} from "./result-renderers";
+import {
   isRecord,
   readNumber,
   readRecordArray,
@@ -35,12 +35,11 @@ import {
   toolResultSummary,
 } from "./tool-presentation";
 
+// 知识来源分层(nicekit/kb 的 effective_scope):本租户库 / 被共享库 / 平台库
 const LAYER_LABELS: Record<string, string> = {
-  tenant: "本社",
+  tenant: "本组织",
   shared: "共享",
   platform: "平台",
-  ota: "OTA",
-  supplier: "供应商",
 };
 
 function MetaBadge({ children }: { children: React.ReactNode }) {
@@ -154,7 +153,7 @@ function readDomain(url: string, supplied?: string): string {
 
 interface Freshness {
   label: string;
-  /** 超过一年的资料在旅游政策场景里通常已失效,需要显式提示。 */
+  /** 超过一年的网页资料通常已失效,需要显式提示。 */
   stale: boolean;
 }
 
@@ -510,22 +509,26 @@ function SubAgentDelegation({ run }: { run: ToolRun }) {
 
 function FriendlyOutput({
   run,
-  projectId,
+  scopeType,
+  scopeId,
 }: {
   run: ToolRun;
-  projectId?: string;
+  scopeType?: string | null;
+  scopeId?: string | null;
 }) {
+  // 宿主注册的结果渲染器优先(见 result-renderers.tsx)。用 createElement 而
+  // 不是 JSX:渲染器来自注册表,JSX 会被 React Compiler 判成渲染期创建组件。
+  const registered = useToolResultRenderer(run.name);
   if (run.name === "Agent") {
     return <SubAgentDelegation run={run} />;
   }
-  if (businessResultKind(run.name, run.output)) {
-    return (
-      <BusinessResult
-        name={run.name}
-        output={run.output}
-        projectId={projectId}
-      />
-    );
+  if (registered && isRecord(run.output)) {
+    return createElement(registered, {
+      name: run.name,
+      output: run.output,
+      scopeType,
+      scopeId,
+    });
   }
   if (run.status === "ok" && isRecord(run.output)) {
     if (run.name === "kb_search") {
@@ -533,18 +536,6 @@ function FriendlyOutput({
     }
     if (run.name === "kb_image_inspect") {
       return <AgentImageInspection output={run.output} />;
-    }
-    if (run.name === "business_media_select") {
-      return (
-        <SelectedKnowledgeMediaSection
-          items={
-            Array.isArray(run.output.selected_kb_media)
-              ? (run.output.selected_kb_media as SelectedKnowledgeMedia[])
-              : []
-          }
-          emptyLabel="已清除业务记录中的知识来源图片。"
-        />
-      );
     }
     if (run.name === "web_search" && Array.isArray(run.output.results)) {
       return <WebSearchResults output={run.output} />;
@@ -713,15 +704,18 @@ function AdvancedDetails({ run }: { run: ToolRun }) {
 
 export function ToolRunCard({
   run,
-  projectId,
-  showBusinessResult = true,
+  scopeType,
+  scopeId,
+  showToolResult = true,
   showStatusIcon = true,
   busy = false,
   onOverride,
 }: {
   run: ToolRun;
-  projectId?: string;
-  showBusinessResult?: boolean;
+  scopeType?: string | null;
+  scopeId?: string | null;
+  /** false = 结果已在别处(RunSections 的重点结果区)渲染,这里不重复 */
+  showToolResult?: boolean;
   showStatusIcon?: boolean;
   busy?: boolean;
   onOverride?: (override: ReviewerOverride) => void;
@@ -729,7 +723,7 @@ export function ToolRunCard({
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const contextualResult =
     run.name === "image_generate" ||
-    businessResultKind(run.name, run.output) !== null;
+    hasToolResultRenderer(run.name, run.output);
   const defaultOpen =
     run.status === "running" ||
     run.status === "failed" ||
@@ -737,7 +731,7 @@ export function ToolRunCard({
     run.permission?.reviewer?.decision === "escalate" ||
     run.permission?.reviewer?.circuitBreaker === true ||
     run.permission?.reviewer?.override?.status === "available" ||
-    (showBusinessResult && shouldExpandTool(run.name, run.status, run.output));
+    (showToolResult && shouldExpandTool(run.name, run.status, run.output));
   const open = manualOpen ?? defaultOpen;
   const expandable =
     run.progress.length > 0 ||
@@ -833,8 +827,8 @@ export function ToolRunCard({
               <Result value={run.output} />
             </div>
           ) : run.output !== undefined &&
-            (!contextualResult || showBusinessResult) ? (
-            <FriendlyOutput run={run} projectId={projectId} />
+            (!contextualResult || showToolResult) ? (
+            <FriendlyOutput run={run} scopeType={scopeType} scopeId={scopeId} />
           ) : null}
           <AdvancedDetails run={run} />
         </div>

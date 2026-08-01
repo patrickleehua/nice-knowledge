@@ -108,14 +108,6 @@ export type ActivityTimelineItem =
       run: ToolRun;
     }
   | {
-      type: "stage";
-      id: string;
-      seq: number;
-      projectId: string;
-      projectStatus: string;
-      stage: "demand" | "itinerary" | "quote" | "docs";
-    }
-  | {
       type: "error";
       id: string;
       seq: number;
@@ -889,18 +881,6 @@ export function buildActivityTimeline(
         id: `approval-legacy-${event.tool_call_id}`,
         seq: event.seq,
         pending: legacy,
-      });
-      continue;
-    }
-
-    if (event.type === "stage.update") {
-      items.push({
-        type: "stage",
-        id: `stage-${event.seq}`,
-        seq: event.seq,
-        projectId: event.project_id,
-        projectStatus: event.project_status,
-        stage: event.stage,
       });
       continue;
     }

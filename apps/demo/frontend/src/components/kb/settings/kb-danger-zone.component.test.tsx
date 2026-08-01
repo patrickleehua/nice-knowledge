@@ -100,15 +100,8 @@ function makePreview(
     impact_counts: {
       documents: 3,
       entities: 7,
-      projects: 1,
+      external_references: 1,
     },
-    project_references: [
-      {
-        id: "project-1",
-        name: "华东团队线路",
-        scope_mode: "explicit",
-      },
-    ],
     blockers: [],
     plan_hash: "a".repeat(64),
     expires_at: "2026-07-29T11:00:00Z",
@@ -190,7 +183,7 @@ describe("KbDangerZone permissions and impact", () => {
           {
             code: "BUSINESS_ARTIFACT_REFERENCE",
             count: 2,
-            identifiers: ["行程 A", "报价 B"],
+            identifiers: ["产物 A", "产物 B"],
             resolution_hint: "先按业务产物生命周期解除引用",
           },
         ],
@@ -199,9 +192,9 @@ describe("KbDangerZone permissions and impact", () => {
     renderDangerZone();
 
     expect(await screen.findByText("文档")).toBeDefined();
-    expect(screen.getByText("当前旅行计划")).toBeDefined();
+    expect(screen.getByText("宿主业务对象引用")).toBeDefined();
     expect(screen.getByText("业务产物仍在引用（2）")).toBeDefined();
-    expect(screen.getByText("行程 A、报价 B")).toBeDefined();
+    expect(screen.getByText("产物 A、产物 B")).toBeDefined();
     expect(
       screen.getByText("解决提示：先按业务产物生命周期解除引用"),
     ).toBeDefined();
@@ -209,7 +202,7 @@ describe("KbDangerZone permissions and impact", () => {
 });
 
 describe("KbDangerZone confirmations and operations", () => {
-  test("requires exact name, reason and project unlink confirmation before archive", async () => {
+  test("requires exact name, reason and external unlink confirmation before archive", async () => {
     renderDangerZone();
 
     fireEvent.click(await screen.findByRole("button", { name: "归档知识库" }));
@@ -228,7 +221,7 @@ describe("KbDangerZone confirmations and operations", () => {
       target: { value: "供应商知识库" },
     });
     expect(submit).toHaveProperty("disabled", true);
-    fireEvent.click(screen.getByRole("checkbox", { name: /确认解除旅行计划关联/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /确认解除外部业务引用/ }));
     expect(submit).toHaveProperty("disabled", false);
 
     fireEvent.click(submit);
@@ -236,7 +229,7 @@ describe("KbDangerZone confirmations and operations", () => {
       expect(lifecycleMocks.archive).toHaveBeenCalledWith(KB_ID, {
         expected_plan_hash: "a".repeat(64),
         reason: "停止旧资料消费",
-        confirm_project_unlinks: true,
+        acknowledge_external_unlink: true,
       });
     });
   });
@@ -246,7 +239,6 @@ describe("KbDangerZone confirmations and operations", () => {
       makePreview({
         allowed_actions: ["empty_delete"],
         impact_counts: {},
-        project_references: [],
       }),
     );
     lifecycleMocks.deleteEmpty.mockRejectedValueOnce(

@@ -49,11 +49,12 @@ import type { KnowledgeBase } from "@/lib/types";
 
 type SearchMode = "answer" | "sources";
 
+// 中性示例问题(宿主按自己的知识域替换即可)
 const EXAMPLE_QUESTIONS = [
-  "巴黎亲子团住哪个区域更方便？",
-  "法国签证领区怎么判断？",
-  "找伦敦四星酒店参考价",
-  "卢浮宫门票成本是多少？",
+  "这批资料里关于数据留存的约定是什么？",
+  "对外交付物有哪些格式要求？",
+  "最近一次流程调整改了哪些环节？",
+  "有没有关于权限审批的明确条款？",
 ];
 
 function SearchPageFallback() {
@@ -262,7 +263,7 @@ function KbSearch() {
               placeholder={
                 mode === "answer"
                   ? "例如：巴黎亲子团住哪个区域更方便？"
-                  : "输入酒店、景点、费用或文档关键词"
+                  : "输入实体名称或文档关键词"
               }
               className="max-h-32 min-h-12 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-3 text-base leading-6 outline-none placeholder:text-muted-foreground"
             />
@@ -431,7 +432,7 @@ function KbSearch() {
             <EmptyState
               icon={SearchX}
               title="没有找到相关资料"
-              description="试试更具体的名称、城市、费用类型或文档关键词。"
+              description="试试更具体的实体名称、字段值或文档关键词。"
               className="rounded-2xl border border-border bg-card py-16"
             />
           )}

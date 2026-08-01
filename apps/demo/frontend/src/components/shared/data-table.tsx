@@ -5,7 +5,7 @@
  * @example
  * ```tsx
  * const columns: ColumnDef<Project, any>[] = [
- *   { accessorKey: "name", header: "旅行计划名", enableSorting: true },
+ *   { accessorKey: "name", header: "名称", enableSorting: true },
  *   { accessorKey: "status", header: "状态", enableSorting: false,
  *     cell: ({ row }) => <StatusBadge meta={PROJECT_STATUS[row.original.status]} /> },
  * ];
@@ -16,7 +16,7 @@
  *   isLoading={query.isLoading}
  *   error={query.error}
  *   onRetry={() => query.refetch()}
- *   empty={{ icon: FolderOpen, title: "暂无旅行计划", action: <Button>新建旅行计划</Button> }}
+ *   empty={{ icon: FolderOpen, title: "暂无数据", action: <Button>新建</Button> }}
  *   onRowClick={(row) => router.push(`/app/projects/${row.id}`)}
  *   getRowId={(row) => row.id}
  *   pagination={{ page, totalPages, onPageChange: setPage }}

@@ -7,9 +7,9 @@
  *
  * <EmptyState
  *   icon={FolderOpen}
- *   title="暂无旅行计划"
- *   description="创建第一个旅行计划,开始 AI 行程规划"
- *   action={<Button>新建旅行计划</Button>}
+ *   title="暂无数据"
+ *   description="创建第一个知识库,开始上传资料"
+ *   action={<Button>新建知识库</Button>}
  * />
  * ```
  */

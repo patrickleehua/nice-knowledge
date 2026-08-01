@@ -60,10 +60,10 @@ function Brand() {
   return (
     <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
       <span className="flex size-7 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-        T
+        N
       </span>
       <span className="text-sm font-semibold text-sidebar-foreground">
-        TravelFlow AI
+        nicekit demo
       </span>
     </div>
   );
@@ -193,7 +193,7 @@ export function AppShell({
         >
           <SheetTitle className="sr-only">主导航</SheetTitle>
           <SheetDescription className="sr-only">
-            TravelFlow AI 功能导航
+            nicekit demo 功能导航
           </SheetDescription>
           <Brand />
           <ShellNav

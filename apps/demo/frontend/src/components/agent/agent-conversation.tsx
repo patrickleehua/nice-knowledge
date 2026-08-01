@@ -2,12 +2,11 @@
 
 import {
   BookOpenText,
-  FolderPlus,
-  ListTodo,
-  Map as MapIcon,
-  ReceiptText,
+  CalendarClock,
+  Globe,
   Sparkles,
   Target,
+  type LucideIcon,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -26,86 +25,71 @@ import {
   type ReviewerOverride,
 } from "@/lib/chat";
 import {
-  businessResultKeysForItems,
-  reconcileBusinessResults,
-  type BusinessResultReconciliation,
-} from "./business-result-reconciliation";
+  reconcileToolResults,
+  toolResultKeysForItems,
+  type ToolResultReconciliation,
+} from "./tool-result-reconciliation";
 import {
   agentMarkdownComponents,
   sanitizeAgentMarkdown,
 } from "./agent-markdown";
 import { ConversationLocator } from "./conversation-locator";
+import { hasToolResultRenderer } from "./result-renderers";
 import { ReviewerOverrideCard } from "./reviewer-override-card";
 import { RunSections } from "./run-sections";
-import { businessResultKind } from "./tool-presentation";
 
-type ConversationMode = "general" | "project";
+export interface ConversationPreset {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  prompt: string;
+}
 
-const EMPTY_PRESETS = {
-  general: [
-    {
-      icon: FolderPlus,
-      title: "创建旅行计划",
-      description: "粘贴客户询价，让 AI 建档并解析需求",
-      prompt: "根据以下客户询价新建旅行计划并解析需求：",
-    },
-    {
-      icon: BookOpenText,
-      title: "检索知识",
-      description: "查询目的地、酒店、成本和历史线路",
-      prompt: "帮我在知识库里查一下：",
-    },
-    {
-      icon: ListTodo,
-      title: "盘点任务",
-      description: "跨旅行计划查看进度、异常和待处理事项",
-      prompt: "帮我查一下最近的旅行计划和进行中的任务，有异常的重点说明。",
-    },
-  ],
-  project: [
-    {
-      icon: BookOpenText,
-      title: "解析需求",
-      description: "整理当前旅行计划询价并找出待补信息",
-      prompt: "解析当前旅行计划的客户需求，并列出需要补充的信息。",
-    },
-    {
-      icon: MapIcon,
-      title: "生成行程",
-      description: "检索资料后生成多套可比较方案",
-      prompt: "为当前旅行计划检索资料并生成多套行程方案。",
-    },
-    {
-      icon: ReceiptText,
-      title: "生成报价",
-      description: "基于已确认行程生成拆分报价草稿",
-      prompt: "基于已确认行程生成拆分报价，并列出待人工确认价格。",
-    },
-  ],
-} as const;
+/**
+ * 空态引导卡。SDK 不知道宿主是干什么的,所以默认只给**通用能力**示例
+ * (知识检索 / 联网 / 定时任务),宿主可以整组换掉:
+ * `<AgentConversation presets={myPresets} emptyTitle=… emptyDescription=… />`
+ */
+export const DEFAULT_EMPTY_PRESETS: readonly ConversationPreset[] = [
+  {
+    icon: BookOpenText,
+    title: "检索知识库",
+    description: "在已发布的知识快照里找依据并给出引用",
+    prompt: "帮我在知识库里查一下：",
+  },
+  {
+    icon: Globe,
+    title: "联网调研",
+    description: "搜索并读取网页,汇总带来源的结论",
+    prompt: "帮我联网查一下,并逐条标注来源：",
+  },
+  {
+    icon: CalendarClock,
+    title: "安排定时任务",
+    description: "让助手按计划周期性执行并把结果发给我",
+    prompt: "每周一早上 9 点帮我做一次：",
+  },
+];
 
 function EmptyState({
-  mode,
+  presets,
+  title,
+  description,
   onPreset,
 }: {
-  mode: ConversationMode;
+  presets: readonly ConversationPreset[];
+  title: string;
+  description: string;
   onPreset?: (prompt: string) => void;
 }) {
-  const presets = EMPTY_PRESETS[mode];
   return (
     <div className="flex min-h-[min(32rem,62dvh)] flex-col items-center justify-center py-10 text-center">
       <div className="mb-5 flex size-10 items-center justify-center rounded-full bg-foreground text-background">
         <Sparkles className="size-4" />
       </div>
-      <h2 className="text-xl font-semibold tracking-[-0.02em]">
-        {mode === "general"
-          ? "今天想让 AI 帮你处理什么？"
-          : "从当前旅行计划继续推进"}
-      </h2>
+      <h2 className="text-xl font-semibold tracking-[-0.02em]">{title}</h2>
       <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        {mode === "general"
-          ? "可以搜索知识、创建旅行计划，或盘点多个旅行计划的进展。"
-          : "Agent 会自动使用当前旅行计划的需求、资料与业务状态。"}
+        {description}
       </p>
       <div className="mt-8 grid w-full gap-2 sm:grid-cols-3">
         {presets.map((preset) => (
@@ -133,9 +117,10 @@ function AssistantTurn({
   group,
   running,
   liveStartedAt,
-  projectId,
+  scopeType,
+  scopeId,
   pending,
-  businessResultReconciliation,
+  toolResultReconciliation,
   onOverride,
   onAdjustImage,
   onGenerateImageAgain,
@@ -143,9 +128,10 @@ function AssistantTurn({
   group: ConversationGroup;
   running: boolean;
   liveStartedAt?: string | null;
-  projectId?: string;
+  scopeType?: string | null;
+  scopeId?: string | null;
   pending?: PendingConfirmation | null;
-  businessResultReconciliation: BusinessResultReconciliation;
+  toolResultReconciliation: ToolResultReconciliation;
   onOverride?: (override: ReviewerOverride) => void;
   onAdjustImage?: (draft: string) => void;
   onGenerateImageAgain?: (message: string) => void;
@@ -204,12 +190,13 @@ function AssistantTurn({
                     : (section.items.at(-1)?.completedAt ??
                       section.items.at(-1)?.createdAt)
               }
-              projectId={projectId}
+              scopeType={scopeType}
+              scopeId={scopeId}
               permissionProjection={permissionProjection}
               imageArtifacts={imageArtifactsBySection.get(section.key)}
-              businessResultKeys={businessResultKeysForItems(
+              toolResultKeys={toolResultKeysForItems(
                 section.items,
-                businessResultReconciliation,
+                toolResultReconciliation,
               )}
               showExecutionActivity={section.items.some(
                 (item) => !item.resultOnly,
@@ -245,8 +232,11 @@ export function AgentConversation({
   items,
   running,
   liveStartedAt,
-  mode,
-  projectId,
+  scopeType,
+  scopeId,
+  presets = DEFAULT_EMPTY_PRESETS,
+  emptyTitle = "今天想让助手帮你做什么？",
+  emptyDescription = "可以检索知识库、联网调研,或安排一个定时任务。",
   pending,
   reviewerOverrides = [],
   onPreset,
@@ -257,8 +247,13 @@ export function AgentConversation({
   items: ConversationItem[];
   running: boolean;
   liveStartedAt?: string | null;
-  mode: ConversationMode;
-  projectId?: string;
+  /** 会话绑定的宿主作用域,透传给工具结果渲染器 */
+  scopeType?: string | null;
+  scopeId?: string | null;
+  /** 空态引导卡(宿主可整组替换) */
+  presets?: readonly ConversationPreset[];
+  emptyTitle?: string;
+  emptyDescription?: string;
   pending?: PendingConfirmation | null;
   reviewerOverrides?: ReviewerOverride[];
   onPreset?: (prompt: string) => void;
@@ -267,9 +262,9 @@ export function AgentConversation({
   onGenerateImageAgain?: (message: string) => void;
 }) {
   const groups = groupConversationItems(items);
-  const businessResultReconciliation = reconcileBusinessResults(
+  const toolResultReconciliation = reconcileToolResults(
     items,
-    (name, output) => businessResultKind(name, output) !== null,
+    hasToolResultRenderer,
   );
   const anchors = buildConversationAnchors(groups);
   const anchorIds = new Map(
@@ -299,7 +294,12 @@ export function AgentConversation({
   if (empty)
     return (
       <div className="mx-auto w-full max-w-[50rem] px-4 py-7 sm:px-6 sm:py-10">
-        <EmptyState mode={mode} onPreset={onPreset} />
+        <EmptyState
+          presets={presets}
+          title={emptyTitle}
+          description={emptyDescription}
+          onPreset={onPreset}
+        />
       </div>
     );
 
@@ -339,9 +339,10 @@ export function AgentConversation({
                 group={group}
                 running={running}
                 liveStartedAt={liveStartedAt}
-                projectId={projectId}
+                scopeType={scopeType}
+                scopeId={scopeId}
                 pending={pending}
-                businessResultReconciliation={businessResultReconciliation}
+                toolResultReconciliation={toolResultReconciliation}
                 onOverride={onOverride}
                 onAdjustImage={onAdjustImage}
                 onGenerateImageAgain={onGenerateImageAgain}

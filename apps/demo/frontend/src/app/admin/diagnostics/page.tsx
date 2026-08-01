@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   AgentDiagnosticDto,
   CapabilitySlotDto,
@@ -50,8 +50,6 @@ import type {
   ProviderProbeDto,
   SystemScheduleDiagnosticDto,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
-
 const SLOT_LABEL: Record<string, string> = {
   "llm.default": "对话模型",
   "kb.image.caption": "视觉模型",
@@ -276,7 +274,7 @@ function collectIssues(data: OperationsDiagnosticsDto): DiagnosticIssue[] {
     );
     issues.push({
       key: "kb-pipelines",
-      title: `${affectedPipelines.length} 个租户的知识采集线路需要处理`,
+      title: `${affectedPipelines.length} 个租户的知识采集链路需要处理`,
       detail: `共 ${remediationCount} 项水位超过阈值，展开下方租户查看详情`,
       href: "/app/kb",
       severity: "error",
@@ -622,7 +620,7 @@ function KnowledgePipeline({
           项处理中
         </span>
         <ToneBadge tone={healthy ? "success" : "destructive"}>
-          {healthy ? "线路正常" : `${org.remediation.length} 项异常`}
+          {healthy ? "链路正常" : `${org.remediation.length} 项异常`}
         </ToneBadge>
       </summary>
       <div className="border-t border-border p-4">
@@ -714,7 +712,7 @@ const PANEL_META: Record<
     description: "查看租户 Agent 激活版本、会话和 iCron 任务状态",
   },
   knowledge: {
-    title: "知识库采集线路",
+    title: "知识库采集链路",
     description: "按租户查看出箱、摄入、富化、快照与检索投影水位",
   },
 };
@@ -1269,7 +1267,7 @@ function DiagnosticDetailDialog({
                   value={`${data.organizations.length} 个`}
                 />
                 <MetricTile
-                  label="线路正常"
+                  label="链路正常"
                   value={`${data.organizations.length - affectedPipelines.length} 个`}
                   tone={affectedPipelines.length === 0 ? "success" : "warning"}
                 />
@@ -1283,8 +1281,8 @@ function DiagnosticDetailDialog({
               <DetailSectionTitle
                 title={
                   showAllPipelines
-                    ? "全部租户线路"
-                    : `异常租户线路（${affectedPipelines.length}）`
+                    ? "全部租户链路"
+                    : `异常租户链路（${affectedPipelines.length}）`
                 }
                 description="异常租户优先排列；展开租户可查看每条流水线水位"
                 action={
@@ -1317,7 +1315,7 @@ function DiagnosticDetailDialog({
                 ))}
                 {visiblePipelines.length === 0 && (
                   <div className="rounded-lg border border-success/30 bg-success/5 px-4 py-10 text-center text-sm text-muted-foreground">
-                    当前所有租户的知识采集线路均正常
+                    当前所有租户的知识采集链路均正常
                   </div>
                 )}
               </div>
@@ -1461,7 +1459,7 @@ export default function AdminDiagnosticsPage() {
     <div className="space-y-6">
       <PageHeader
         title="系统诊断"
-        description="统一查看模型能力、运行进程、Agent 生态、调度任务和知识采集线路"
+        description="统一查看模型能力、运行进程、Agent 生态、调度任务和知识采集链路"
         actions={
           <Button disabled={probe.isPending} onClick={() => probe.mutate()}>
             <RefreshCw
@@ -1523,7 +1521,7 @@ export default function AdminDiagnosticsPage() {
                     ? "系统存在需要处置的问题"
                     : warnings > 0
                       ? "系统可运行，仍有配置提醒"
-                      : "所有纳管线路状态正常"}
+                      : "所有纳管链路状态正常"}
                 </h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {data.runtime.dispatch_mode === "celery"
@@ -1629,7 +1627,7 @@ export default function AdminDiagnosticsPage() {
               />
               <OverviewCard
                 icon={<Database className="size-4" />}
-                title="知识采集线路"
+                title="知识采集链路"
                 value={`${data.organizations.length - affectedPipelines.length}/${data.organizations.length} 租户正常`}
                 detail={`${affectedPipelines.length} 个租户需处理 · ${remediationCount} 项水位异常`}
                 tone={knowledgeTone}

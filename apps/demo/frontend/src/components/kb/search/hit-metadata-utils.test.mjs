@@ -102,7 +102,7 @@ test("source line anchor stays empty when neither source is anchored", () => {
   assert.deepEqual(
     sourceLineAnchor(
       { start_line: null, end_line: null },
-      { heading_path: "酒店 / 价格" },
+      { heading_path: "制度 / 条款" },
     ),
     { start: null, end: null },
   );

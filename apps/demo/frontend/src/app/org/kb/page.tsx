@@ -6,16 +6,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Coins,
   Database,
+  BookMarked,
   FileText,
   FolderOpen,
-  Hotel,
   Layers,
-  MapPin,
   Plus,
   RotateCcw,
-  Route,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -83,31 +80,21 @@ const KB_TYPE_ITEMS: Record<string, string> = {
 };
 
 /** 类型 → 图标与配色(卡片头像用;色相区分类型,暗色模式各给显式变体) */
+// kb_type 后端已是自由 tag(不驱动任何分支)。这里只给三个中性预设配图标,
+// 其余取值一律走 FALLBACK_TYPE_VISUAL —— 不必也不该穷举宿主的分类法。
 const KB_TYPE_VISUALS: Record<string, { icon: LucideIcon; className: string }> =
   {
-    destination: {
-      icon: MapPin,
-      className: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    },
-    hotel: {
-      icon: Hotel,
-      className: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-    },
-    cost: {
-      icon: Coins,
-      className: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-    },
-    route: {
-      icon: Route,
-      className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    mixed: {
+      icon: Layers,
+      className: "bg-primary/10 text-primary",
     },
     document: {
       icon: FileText,
       className: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
     },
-    mixed: {
-      icon: Layers,
-      className: "bg-primary/10 text-primary",
+    reference: {
+      icon: BookMarked,
+      className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
     },
   };
 
@@ -217,7 +204,7 @@ export default function KbListPage() {
   const restoreMutation = useMutation({
     mutationFn: (kbId: string) => kbLifecycleApi.restore(kbId),
     onSuccess: () => {
-      toast.success("知识库已恢复；原分享和旅行计划关联不会自动恢复");
+      toast.success("知识库已恢复；原分享与外部业务引用不会自动恢复");
       queryClient.invalidateQueries({ queryKey: ["kb-bases"] });
       queryClient.invalidateQueries({ queryKey: KB_STATUS_BOARD_QUERY_KEY });
     },
@@ -245,7 +232,7 @@ export default function KbListPage() {
                     id="kb-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="如:欧洲目的地基础库"
+                    placeholder="如:产品手册库"
                   />
                 </FormField>
                 <FormField label="类型" htmlFor="kb-type">

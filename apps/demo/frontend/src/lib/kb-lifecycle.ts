@@ -16,12 +16,6 @@ export interface KnowledgeBaseDeletionBlocker {
   retry_at?: string | null;
 }
 
-export interface KnowledgeBaseProjectReference {
-  id: string;
-  name: string;
-  scope_mode: "explicit" | "default";
-}
-
 export interface KnowledgeBaseLifecycleOperation {
   id: string;
   kb_id: string;
@@ -52,8 +46,11 @@ export interface KnowledgeBaseDeletionPreview {
   consumption_epoch: number;
   complete: boolean;
   allowed_actions: KnowledgeBaseDeletionAction[];
+  /**
+   * 影响面计数。`external_references` = 宿主业务对象对本库的引用数
+   * (由 ReferenceScanner 统计;SDK 不认识那些表,只拿到一个数)。
+   */
   impact_counts: Record<string, number>;
-  project_references: KnowledgeBaseProjectReference[];
   blockers: KnowledgeBaseDeletionBlocker[];
   plan_hash: string | null;
   expires_at: string | null;
@@ -172,7 +169,11 @@ export interface OrphanCleanupResult {
 export interface ArchiveKnowledgeBaseRequest {
   expected_plan_hash: string;
   reason: string;
-  confirm_project_unlinks: boolean;
+  /**
+   * 本库仍被外部业务对象引用时,归档需显式确认"由宿主解除关联"(A8)。
+   * 无外部引用时传 false 即可。
+   */
+  acknowledge_external_unlink: boolean;
 }
 
 export interface PurgeKnowledgeBaseRequest {
@@ -186,7 +187,7 @@ export interface PurgeKnowledgeBaseRequest {
 /** 强制清理可跳过的 blocker(公开 code 口径,与后端 FORCE_BYPASSABLE_BLOCKER_CODES 对齐) */
 export const FORCE_BYPASSABLE_BLOCKER_CODES = new Set([
   "RETENTION_PERIOD_ACTIVE",
-  "HISTORICAL_RETRIEVAL_REFERENCE",
+  "EXTERNAL_SCOPE_REFERENCE",
   "BUSINESS_ARTIFACT_REFERENCE",
   "KNOWLEDGE_SNAPSHOT_REFERENCE",
   "FEEDBACK_OR_CITATION_REFERENCE",

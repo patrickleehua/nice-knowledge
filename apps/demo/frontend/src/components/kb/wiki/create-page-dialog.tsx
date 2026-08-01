@@ -103,7 +103,7 @@ export function CreatePageDialog({
               id="wiki-page-title"
               value={title}
               autoFocus
-              placeholder="如:英国签证材料清单"
+              placeholder="如:报销材料清单"
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && title.trim() && !create.isPending) {

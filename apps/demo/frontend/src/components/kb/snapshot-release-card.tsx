@@ -18,8 +18,7 @@ import { ConfirmDialog, ToneBadge, type Tone } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type { KnowledgeBase } from "@/lib/types";
 
 type SnapshotStatus = "building" | "ready" | "active" | "retired" | "failed";
@@ -249,7 +248,7 @@ export function SnapshotReleaseCard({ kbId }: { kbId: string }) {
     active: {
       label: "已发布",
       title: "知识库已发布",
-      description: "当前版本正在供检索、行程与报价使用。",
+      description: "当前版本正在供检索与下游消费使用。",
       tone: "primary" as const,
       icon: Rocket,
     },
@@ -374,7 +373,7 @@ export function SnapshotReleaseCard({ kbId }: { kbId: string }) {
                 </Button>
               }
               title="发布这个知识版本?"
-              description={`版本 ${shortId(nextReady.id)} 将立即供检索、行程与报价使用。`}
+              description={`版本 ${shortId(nextReady.id)} 将立即供检索与下游消费使用。`}
               confirmLabel="确认发布"
               onConfirm={() => activate.mutateAsync(nextReady)}
             />
@@ -505,7 +504,7 @@ export function SnapshotReleaseCard({ kbId }: { kbId: string }) {
                           </Button>
                         }
                         title="发布这个知识版本?"
-                        description={`版本 ${shortId(snapshot.id)} 将立即供检索、行程与报价使用。`}
+                        description={`版本 ${shortId(snapshot.id)} 将立即供检索与下游消费使用。`}
                         confirmLabel="确认发布"
                         onConfirm={() => activate.mutateAsync(snapshot)}
                       />

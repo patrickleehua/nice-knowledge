@@ -1,7 +1,8 @@
 // 轻量 API 客户端:fetch + Bearer。access(15min)过期时用 refresh_token 静默续期(旋转式)并重试一次;
 // 并发 401 共享同一 refresh promise(单飞),避免旋转竞态把彼此的新 refresh 作废;
-// 二次 401 才清会话回登录(带 ?next=当前路径)。API 路径以 output/TravelFlow AI-architecture.md §10 为准。
+// 二次 401 才清会话回登录(带 ?next=当前路径)。API 路径以 nicekit 的 /api/v1 路由为准。
 
+import { ApiError } from "@/lib/api-error";
 import {
   clearSession,
   getRefreshToken,
@@ -10,17 +11,12 @@ import {
   type Role,
 } from "@/lib/auth";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+// demo 后端默认监听 8020(apps/demo/backend/run.py 读 DEMO_PORT,默认 8020)
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8020";
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    public code?: string,
-  ) {
-    super(message);
-  }
-}
+// ApiError 定义在零依赖的 lib/api-error.ts(见那里的注释),这里原样再导出,
+// 调用方仍可 `import { ApiError } from "@/lib/api"`。
+export { ApiError };
 
 interface StructuredApiErrorDetail {
   code: string;

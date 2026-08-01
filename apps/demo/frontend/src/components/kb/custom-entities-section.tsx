@@ -1,6 +1,12 @@
 "use client";
 
-// M3a 自定义类型实体区块:类型选择(仅非内置)→ 实体列表 + field_schema 动态渲染的编辑表单。
+// 通用实体区块:类型选择 → 实体列表 + field_schema 动态渲染的编辑表单。
+//
+// SDK 化改造(MIGRATION-PLAN B29/§5.8):TF 有五张旅游专表各带一套 CRUD 端点与
+// 一张写死列名的表格。SDK 不带任何行业表——**所有**实体统一走
+// `/kb/entity-types`(类型注册表)+ `/kb/bases/{kb_id}/entities`(attributes
+// JSONB),表单由 field_schema 动态生成,因此这里不区分内置/自定义类型。
+//
 // 快照管理库(active_snapshot_id 非空)一律只读:入口禁用 + 顶部提示条;写 409 消息由后端兜底。
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -151,12 +157,11 @@ export function CustomEntitiesSection({ kbId }: { kbId: string }) {
     queryKey: ["kb-entity-types"],
     queryFn: () => api.get<EntityType[]>("/kb/entity-types"),
   });
-  const customTypes = useMemo(
-    () => (types ?? []).filter((t) => !t.is_builtin),
-    [types],
-  );
-  const activeKey = selectedKey ?? customTypes[0]?.type_key ?? null;
-  const activeType = customTypes.find((t) => t.type_key === activeKey) ?? null;
+  // 内置类型与宿主注册类型同等对待:两者都只是注册表里的一条 schema
+  const availableTypes = useMemo(() => types ?? [], [types]);
+  const activeKey = selectedKey ?? availableTypes[0]?.type_key ?? null;
+  const activeType =
+    availableTypes.find((t) => t.type_key === activeKey) ?? null;
 
   // 快照管理判定:active_snapshot_id 非空 → 只读(旧后端无此字段时视为可写,写入由后端 409 兜底)
   const { data: bases } = useQuery({
@@ -233,10 +238,10 @@ export function CustomEntitiesSection({ kbId }: { kbId: string }) {
   }
 
   // 没有任何自定义类型时不渲染(类型在「类型注册表」中创建后自动出现)
-  if (!customTypes.length) return null;
+  if (!availableTypes.length) return null;
 
   const typeItems: Record<string, string> = Object.fromEntries(
-    customTypes.map((t) => [t.type_key, t.display_name]),
+    availableTypes.map((t) => [t.type_key, t.display_name]),
   );
   const requiredMissing = specs.some(
     (s) => s.required && !(form[s.key] ?? "").trim(),
@@ -246,7 +251,7 @@ export function CustomEntitiesSection({ kbId }: { kbId: string }) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="flex items-center gap-2 text-sm">
-          自定义实体({entities?.length ?? 0})
+          实体({entities?.length ?? 0})
         </CardTitle>
         <div className="flex items-center gap-2">
           <Select
@@ -258,7 +263,7 @@ export function CustomEntitiesSection({ kbId }: { kbId: string }) {
               <SelectValue placeholder="选择类型…" />
             </SelectTrigger>
             <SelectContent>
-              {customTypes.map((t) => (
+              {availableTypes.map((t) => (
                 <SelectItem key={t.type_key} value={t.type_key}>
                   {t.display_name}
                 </SelectItem>

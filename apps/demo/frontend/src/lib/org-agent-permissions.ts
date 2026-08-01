@@ -132,7 +132,7 @@ export const TOOL_CATEGORY_ORDER: ToolCategory[] = [
 
 export const PERMISSION_SCOPE_LABELS: Record<PermissionScope, string> = {
   session: "仅当前会话",
-  project: "最大到旅行计划",
+  resource: "最大到业务作用域",
   organization: "最大到组织",
 };
 

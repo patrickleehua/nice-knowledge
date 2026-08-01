@@ -3,21 +3,25 @@ import test from "node:test";
 import {
   PROMOTION_MIN_CONFIDENCE,
   PROMOTION_MIN_SIGHTINGS,
+  memoryScopeLabel,
   memoryScopeTarget,
   memorySourceLabel,
   memorySourceSessionId,
+  memoryStatusMeta,
+  memoryTypeMeta,
   promotionHint,
 } from "./memory.ts";
 
 function item(overrides = {}) {
   return {
     id: "m-1",
-    scope: "customer",
-    scope_ref_id: "王总",
+    // scope 是自由字符串:这里用一个"宿主注册的"范围名做样例
+    scope: "workspace",
+    scope_ref_id: "ws-42",
     scope_ref_label: null,
     memory_type: "preference_candidate",
-    title: "不接受夜间大巴",
-    content: "老人同行,夜间大巴一律不接受。",
+    title: "报告一律输出 Markdown",
+    content: "对外交付物默认用 Markdown,不要生成 PDF。",
     source: "memory_extraction:5a2c9f00-0000-4000-8000-000000000001",
     source_message_id: null,
     confidence: 0.6,
@@ -41,16 +45,31 @@ test("来源前缀翻成人话,并能取回会话 id", () => {
   assert.equal(memorySourceSessionId("memory_write:"), null);
 });
 
-test("范围归属优先取项目标题,取不到回落 id,全社无归属", () => {
+test("scope 词表是开放的:内置 org 有文案,宿主自定义范围原样回显", () => {
+  assert.equal(memoryScopeLabel("org"), "全组织通用");
+  assert.equal(memoryScopeLabel("workspace"), "workspace");
+});
+
+test("范围归属优先取宿主解析出的展示名,取不到回落 ref,org 无归属", () => {
   assert.equal(
-    memoryScopeTarget(item({ scope: "project", scope_ref_label: "王总墨尔本8日" })),
-    "王总墨尔本8日",
+    memoryScopeTarget(item({ scope_ref_label: "运营工作区" })),
+    "运营工作区",
   );
+  assert.equal(memoryScopeTarget(item({ scope_ref_id: "ws-42" })), "ws-42");
   assert.equal(
-    memoryScopeTarget(item({ scope: "project", scope_ref_id: "p-1" })),
-    "p-1",
+    memoryScopeTarget(item({ scope: "org", scope_ref_id: null })),
+    "—",
   );
-  assert.equal(memoryScopeTarget(item({ scope: "org", scope_ref_id: null })), "—");
+});
+
+test("未知类型/状态兜底成中性徽章而不是空白", () => {
+  assert.equal(memoryTypeMeta("constraint").tone, "destructive");
+  assert.deepEqual(memoryTypeMeta("brand_new"), {
+    label: "brand_new",
+    tone: "muted",
+  });
+  assert.equal(memoryStatusMeta("active").tone, "success");
+  assert.deepEqual(memoryStatusMeta("weird"), { label: "weird", tone: "muted" });
 });
 
 test("提升提示只对候选给出,且区分缺次数与缺置信", () => {
@@ -59,7 +78,10 @@ test("提升提示只对候选给出,且区分缺次数与缺置信", () => {
   assert.equal(promotionHint(item({ memory_type: "constraint" })), null);
 
   const needMore = promotionHint(item({ sightings: 1, confidence: 0.9 }));
-  assert.match(needMore, new RegExp(`再被印证 ${PROMOTION_MIN_SIGHTINGS - 1} 次`));
+  assert.match(
+    needMore,
+    new RegExp(`再被印证 ${PROMOTION_MIN_SIGHTINGS - 1} 次`),
+  );
 
   const needConfidence = promotionHint(
     item({ sightings: PROMOTION_MIN_SIGHTINGS, confidence: 0.6 }),
@@ -68,7 +90,10 @@ test("提升提示只对候选给出,且区分缺次数与缺置信", () => {
   assert.match(needConfidence, /置信需达/);
 
   const ready = promotionHint(
-    item({ sightings: PROMOTION_MIN_SIGHTINGS, confidence: PROMOTION_MIN_CONFIDENCE }),
+    item({
+      sightings: PROMOTION_MIN_SIGHTINGS,
+      confidence: PROMOTION_MIN_CONFIDENCE,
+    }),
   );
   assert.match(ready, /已满足提升条件/);
 });

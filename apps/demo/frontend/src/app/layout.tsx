@@ -20,8 +20,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TravelFlow AI",
-  description: "带人工审核闭环的旅游产品生产工作台",
+  title: "nicekit demo",
+  description: "多租户 Agent + 知识库平台 SDK 的可视化测试台",
 };
 
 export default function RootLayout({

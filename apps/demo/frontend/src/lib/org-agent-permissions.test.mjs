@@ -30,7 +30,7 @@ function policy(overrides = {}) {
     reviewer_enabled: false,
     reviewer_eligible_categories: [],
     reviewer_eligible_tools: [],
-    max_scope: "project",
+    max_scope: "resource",
     max_grant_ttl_seconds: 28800,
     max_full_access_ttl_seconds: 3600,
     is_enabled: true,
@@ -46,7 +46,7 @@ const KNOWN_TOOLS = [
   "image_generate",
   "ota_apply",
   "quote_cost_item_delete",
-  "project_list",
+  "kb_list",
 ];
 
 function options(overrides = {}) {
@@ -173,12 +173,12 @@ test("overridable categories must be a subset of reviewer eligible ones", () => 
 test("tool names outside the catalog are rejected before submitting", () => {
   const draft = policyToDraft(policy());
   draft.denied_tools = ["forged_super_tool"];
-  draft.user_required_tools = ["project_list"];
+  draft.user_required_tools = ["kb_list"];
   const issue = validatePolicyDraft(draft, options()).find(
     (item) => item.field === "hard_rules",
   );
   assert.match(issue.message, /forged_super_tool/);
-  assert.equal(issue.message.includes("project_list"), false);
+  assert.equal(issue.message.includes("kb_list"), false);
 });
 
 test("ttl bounds match the backend field constraints", () => {
@@ -231,7 +231,7 @@ test("change detection ignores selection order", () => {
 test("catalog defaults to tools that cannot run unattended", () => {
   const catalog = [
     {
-      name: "project_list",
+      name: "kb_list",
       label: "项目列表",
       group: "项目",
       description: "",
@@ -242,7 +242,7 @@ test("catalog defaults to tools that cannot run unattended", () => {
     },
     {
       name: "ota_apply",
-      label: "回填OTA价格",
+      label: "写入外部结果",
       group: "比价",
       description: "",
       effect: "write",

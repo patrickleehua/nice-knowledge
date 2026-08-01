@@ -2,13 +2,9 @@
 // page_type 是开放字符串,未知类型回退 FileText 图标 + 原文标签(零迁移)。
 
 import {
-  BedDouble,
   BookOpen,
   FileStack,
   FileText,
-  Handshake,
-  MapPin,
-  Route,
   Tag,
   type LucideIcon,
 } from "lucide-react";
@@ -18,13 +14,17 @@ export interface PageTypeMeta {
   icon: LucideIcon;
 }
 
-/** 已知类型(顺序即左栏分组顺序) */
+/**
+ * 内置类型(顺序即左栏分组顺序)。
+ *
+ * 后端 `page_type` 是开放字符串(MIGRATION-PLAN B20):默认不限制,宿主想收紧
+ * 就调 `set_valid_page_types()` 注册白名单。SDK 只内置三档 ——
+ * `overview`(每库一篇综述)、`topic`(LLM 缺省归一化目标,见
+ * wiki_gen.DEFAULT_PAGE_TYPE)、`source_summary`(来源摘要)。
+ * 其余类型走 pageTypeMeta 的兜底:FileText + 原文标签。
+ */
 export const PAGE_TYPE_META: Record<string, PageTypeMeta> = {
   overview: { label: "总览", icon: BookOpen },
-  destination: { label: "目的地", icon: MapPin },
-  supplier: { label: "供应商", icon: Handshake },
-  hotel: { label: "酒店", icon: BedDouble },
-  route: { label: "线路", icon: Route },
   topic: { label: "主题", icon: Tag },
   source_summary: { label: "来源摘要", icon: FileStack },
 };

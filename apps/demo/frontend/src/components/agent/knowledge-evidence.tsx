@@ -16,16 +16,9 @@ interface EvidenceHit {
   media_refs: KnowledgeMediaReference[];
 }
 
-const RETRIEVAL_GROUPS = [
-  "destinations",
-  "pois",
-  "hotels",
-  "costs",
-  "route_templates",
-  "pages",
-  "chunks",
-  "entities",
-] as const;
+// 检索结果的分桶键由后端的实体类型注册表决定(宿主注册什么类型就有什么桶),
+// 因此不写死清单:凡是值为数组的键都当作一个桶收集。TF 曾在这里硬编码五个
+// 行业分组(destinations/pois/hotels/...),SDK 化后那五张专表已不存在。
 
 function isCitation(value: unknown): value is SearchCitation {
   return (
@@ -60,8 +53,8 @@ function evidenceHits(output: Record<string, unknown>): EvidenceHit[] {
   const directHits = readRecordArray(output.hits);
   const values: unknown[] = [...directHits];
   if (!directHits.length && isRecord(output.retrieval)) {
-    for (const group of RETRIEVAL_GROUPS) {
-      values.push(...readRecordArray(output.retrieval[group]));
+    for (const bucket of Object.values(output.retrieval)) {
+      values.push(...readRecordArray(bucket));
     }
   }
   return values

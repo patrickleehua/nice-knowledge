@@ -42,9 +42,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api";
 import { kbImages } from "@/lib/kb-images";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
-import { cn } from "@/lib/utils";
 import type {
   ImageAssetIssueKind,
   ImageEnrichmentStatus,

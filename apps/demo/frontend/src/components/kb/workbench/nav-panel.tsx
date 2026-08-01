@@ -54,10 +54,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { useCurrentOrg } from "@/lib/auth";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import { useStoredList } from "@/lib/use-local-storage";
 import { useUrlState } from "@/lib/use-url-state";
-import { cn } from "@/lib/utils";
 import type { KnowledgeBase, SourceDocument } from "@/lib/types";
 import {
   ACTIVE_STATUSES,

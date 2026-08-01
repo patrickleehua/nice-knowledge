@@ -31,10 +31,8 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type { KbChunk, SourceDocument } from "@/lib/types";
-import { cn } from "@/lib/utils";
-
 const DELETE_ARM_MS = 3000;
 
 export function DocDetail({

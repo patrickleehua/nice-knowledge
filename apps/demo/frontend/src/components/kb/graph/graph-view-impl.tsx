@@ -31,6 +31,7 @@ import {
 import {
   readSigmaPalette,
   SIGMA_PALETTE_FALLBACK,
+  sigmaTypeColor,
   withAlpha,
   type SigmaGraphPalette,
 } from "./graph-palette";
@@ -180,7 +181,7 @@ export default function KbGraphViewImpl({ kbId }: { kbId: string }) {
           ? palette.communities[
               (communityMap.get(node) ?? 0) % palette.communities.length
             ]
-          : (palette.types[attrs.entityType] ?? palette.fallbackType),
+          : sigmaTypeColor(palette, attrs.entityType),
     }));
     graph.updateEachEdgeAttributes((_edge, attrs) => ({
       ...attrs,
@@ -539,7 +540,7 @@ export default function KbGraphViewImpl({ kbId }: { kbId: string }) {
       .map(([type, count]) => ({
         type,
         label: typeLabel(type),
-        color: palette.types[type] ?? palette.fallbackType,
+        color: sigmaTypeColor(palette, type),
         count,
       }));
   }, [graph, palette]);

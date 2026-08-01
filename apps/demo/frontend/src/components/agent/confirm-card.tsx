@@ -50,7 +50,7 @@ const reasonCopy: Record<string, string> = {
   compatibility_confirmation: "兼容模式保留原确认边界",
   organization_user_required: "组织策略要求由用户确认",
   tool_user_required: "该业务动作必须由用户确认",
-  general_project_mutation: "通用会话修改既有旅行计划需要确认",
+  general_scope_mutation: "通用会话修改既有业务作用域需要确认",
   reviewer_not_eligible: "该操作不在智能审批范围内",
   reviewer_unavailable: "独立 Reviewer 当前不可用",
   reviewer_malformed: "独立 Reviewer 未返回有效决定",
@@ -63,9 +63,9 @@ const reasonCopy: Record<string, string> = {
 function targetLabel(item: ApprovalBundleItem) {
   if (item.scope?.resource_type && item.scope.resource_id)
     return `${item.scope.resource_type} · ${item.scope.resource_id.slice(0, 8)}`;
-  if (item.scope?.target_project_id)
-    return `旅行计划 · ${item.scope.target_project_id.slice(0, 8)}`;
-  return item.scope?.mode === "general" ? "通用会话" : "当前旅行计划";
+  if (item.scope?.target_scope_id)
+    return `作用域 · ${item.scope.target_scope_id.slice(0, 8)}`;
+  return item.scope?.mode === "general" ? "通用会话" : "当前作用域";
 }
 
 function RiskBadge({ risk }: { risk: ToolRisk }) {

@@ -8,7 +8,7 @@ const steps = [
   { id: "done", title: "已完成", status: "done" as const, note: null },
   {
     id: "failed",
-    title: "生成行程",
+    title: "汇总检索结果",
     status: "failed" as const,
     note: "执行中断",
   },
@@ -26,7 +26,6 @@ describe("composer plan dock", () => {
         <CommandInput
           value=""
           onChange={vi.fn()}
-          onProject={vi.fn()}
           placeholder="输入消息"
           above={
             <PlanChecklist steps={steps} onContinueStep={onContinueStep} />

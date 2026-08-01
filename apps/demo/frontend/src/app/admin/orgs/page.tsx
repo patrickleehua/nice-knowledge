@@ -182,7 +182,7 @@ export default function AdminOrgsPage() {
                     id="org-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="如:途乐国际旅行社"
+                    placeholder="如:示例科技有限公司"
                   />
                 </FormField>
                 <FormField

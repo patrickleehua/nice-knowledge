@@ -46,7 +46,7 @@ export function OverviewView({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">这个知识库还是空的</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                上传资料 → 审核抽取出的事实 → 构建并激活快照，知识才会被检索、行程与报价使用。
+                上传资料 → 审核抽取出的事实 → 构建并激活快照，知识才会被检索与下游消费使用。
               </p>
             </div>
             <Button size="sm" onClick={() => onNavigate("sources")}>

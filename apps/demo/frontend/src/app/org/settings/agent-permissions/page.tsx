@@ -66,7 +66,11 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "agent.permission.policy_rolled_back": "策略回滚",
 };
 
-const SCOPE_OPTIONS: PermissionScope[] = ["session", "project", "organization"];
+const SCOPE_OPTIONS: PermissionScope[] = [
+  "session",
+  "resource",
+  "organization",
+];
 
 function Section({
   title,

@@ -43,8 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   AdminOrg,
   LlmProviderDto,

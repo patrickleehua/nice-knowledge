@@ -61,9 +61,8 @@ const COUNT_LABELS: Record<string, string> = {
   fact_claims: "事实",
   media: "媒体",
   shares: "活动分享",
-  projects: "当前项目",
+  external_references: "外部业务引用",
   active_tasks: "活动任务",
-  retrieval_snapshots: "历史检索",
   business_artifacts: "业务产物",
   feedback_references: "反馈与引用",
   pinned_entities: "人工固定实体",
@@ -75,7 +74,8 @@ const BLOCKER_LABELS: Record<string, string> = {
   RETENTION_PERIOD_ACTIVE: "资料仍在审计保留期内",
   LEGAL_HOLD_ACTIVE: "资料处于法律保留状态",
   ACTIVE_TASK_REFERENCE: "仍有活动任务",
-  HISTORICAL_RETRIEVAL_REFERENCE: "历史检索仍在引用",
+  EXTERNAL_SCOPE_REFERENCE: "宿主业务对象仍在引用",
+  KNOWLEDGE_BASE_REFERENCE: "其他知识库仍在引用",
   BUSINESS_ARTIFACT_REFERENCE: "业务产物仍在引用",
   KNOWLEDGE_SNAPSHOT_REFERENCE: "受保护知识快照仍在引用",
   FEEDBACK_OR_CITATION_REFERENCE: "反馈或引用记录仍在使用",
@@ -247,7 +247,7 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
   const [action, setAction] = useState<ConfirmedAction | null>(null);
   const [confirmationName, setConfirmationName] = useState("");
   const [reason, setReason] = useState("");
-  const [projectUnlinksConfirmed, setProjectUnlinksConfirmed] = useState(false);
+  const [externalUnlinkConfirmed, setExternalUnlinkConfirmed] = useState(false);
   // 强制清理:跳过保留期与引用类拦截;需管理员额外勾选确认
   const [forceIntent, setForceIntent] = useState(false);
   const [forceConfirmed, setForceConfirmed] = useState(false);
@@ -300,7 +300,7 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
     setAction(null);
     setConfirmationName("");
     setReason("");
-    setProjectUnlinksConfirmed(false);
+    setExternalUnlinkConfirmed(false);
     setForceIntent(false);
     setForceConfirmed(false);
   };
@@ -320,7 +320,7 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
         return kbLifecycleApi.archive(kbId, {
           expected_plan_hash: currentPreview.plan_hash,
           reason: reason.trim(),
-          confirm_project_unlinks: projectUnlinksConfirmed,
+          acknowledge_external_unlink: externalUnlinkConfirmed,
         });
       }
       if (selected === "empty_delete") {
@@ -387,14 +387,15 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
   const selectedCopy = action ? ACTION_COPY[action] : null;
   const nameConfirmed =
     Boolean(preview) && confirmationName === preview?.kb_name;
-  const projectsConfirmed =
-    (preview?.project_references.length ?? 0) === 0 || projectUnlinksConfirmed;
+  const externalRefCount = preview?.impact_counts.external_references ?? 0;
+  const externalUnlinkAcknowledged =
+    externalRefCount === 0 || externalUnlinkConfirmed;
   const reasonConfirmed = action === "empty_delete" || reason.trim().length > 0;
   const canSubmit =
     Boolean(action && preview) &&
     Boolean(preview?.plan_hash) &&
     nameConfirmed &&
-    projectsConfirmed &&
+    externalUnlinkAcknowledged &&
     reasonConfirmed &&
     (!forceIntent || forceConfirmed) &&
     !execute.isPending;
@@ -500,19 +501,13 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
               )}
             </div>
             <ImpactSummary preview={preview} />
-            {preview.project_references.length > 0 && (
+            {(preview.impact_counts.external_references ?? 0) > 0 && (
               <div className="space-y-1 text-sm">
-                <p className="font-medium">将解除的当前项目关联</p>
-                <ul className="list-inside list-disc text-muted-foreground">
-                  {preview.project_references.map((project) => (
-                    <li key={project.id}>
-                      {project.name} ·{" "}
-                      {project.scope_mode === "explicit"
-                        ? "显式范围"
-                        : "默认范围"}
-                    </li>
-                  ))}
-                </ul>
+                <p className="font-medium">宿主业务对象引用</p>
+                <p className="text-muted-foreground">
+                  本库被宿主的 {preview.impact_counts.external_references}{" "}
+                  个业务对象引用。SDK 不认识那些表,只统计数量;解除关联由宿主自行完成。
+                </p>
               </div>
             )}
             {operation && (
@@ -608,7 +603,7 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
                   <p className="font-medium text-destructive">强制永久清理</p>
                   <p className="text-xs text-muted-foreground">
                     跳过保留期等待与 {forceBypassableBlockers.length}{" "}
-                    类引用拦截立即清理；引用这些资料的历史检索、行程、报价将出现死链。
+                    类引用拦截立即清理；引用这些资料的历史检索与外部业务对象将出现死链。
                     法律保留、共享对象与进行中任务仍会拦截。
                   </p>
                   <Button
@@ -660,18 +655,18 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
                 autoComplete="off"
               />
             </label>
-            {preview && preview.project_references.length > 0 && (
+            {externalRefCount > 0 && (
               <label className="flex items-start gap-2 text-sm">
                 <Checkbox
-                  checked={projectUnlinksConfirmed}
+                  checked={externalUnlinkConfirmed}
                   onCheckedChange={(checked) =>
-                    setProjectUnlinksConfirmed(checked === true)
+                    setExternalUnlinkConfirmed(checked === true)
                   }
-                  aria-label="确认解除项目关联"
+                  aria-label="确认解除外部业务引用"
                 />
                 <span>
-                  我确认解除以上 {preview.project_references.length}{" "}
-                  个当前项目关联； 历史检索和已发布业务产物不会被改写。
+                  我确认由宿主解除以上 {externalRefCount}{" "}
+                  处外部业务引用；已发布的业务产物不会被改写。
                 </span>
               </label>
             )}
@@ -690,7 +685,7 @@ export function KbDangerZone({ kbId }: { kbId: string }) {
                     .map((b) => BLOCKER_LABELS[b.code] ?? b.code)
                     .join("、")}{" "}
                   共 {forceBypassableBlockers.length}{" "}
-                  类拦截；引用这些资料的历史检索、行程与报价将出现死链，删除后无法恢复。
+                  类拦截；引用这些资料的历史检索与外部业务对象将出现死链，删除后无法恢复。
                 </span>
               </label>
             )}

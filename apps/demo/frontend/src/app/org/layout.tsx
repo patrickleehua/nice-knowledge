@@ -4,52 +4,44 @@ import {
   BrainCircuit,
   BriefcaseBusiness,
   Database,
-  FileStack,
-  Route,
   ShieldCheck,
   Users,
 } from "lucide-react";
 import { AppShell, type NavItem } from "@/components/shell/app-shell";
 
-// 成员与角色、模型偏好仅 org_admin(与后端 members.py require_role(ORG_ADMIN, PLATFORM_ADMIN) 对齐);
-// 知识库/模板库对区域内全角色(含 operator)可见,写操作由后端 require_role 兜底。
-// 经营线路资产同知识库口径:全角色可见,删除/导入写操作由后端 require_role 兜底。
+// 成员与角色仅 org_admin/platform_admin(与后端 members.py 的 require_role 对齐);
+// 知识库对区域内全角色可见,写操作由后端 require_write_role 兜底。
 const nav: NavItem[] = [
   // 知识库页内含生命周期维护 Tab(操作记录/数据健康),不再单开菜单
   { href: "/org/kb", label: "知识库", icon: Database },
-  { href: "/org/route-assets", label: "经营线路资产", icon: Route },
   {
     href: "/org/members",
     label: "成员与角色",
     icon: Users,
     roles: ["org_admin", "platform_admin"],
   },
-  { href: "/org/templates", label: "模板库", icon: FileStack },
   {
     href: "/org/settings/agent-permissions",
     label: "Agent 权限",
     icon: ShieldCheck,
     roles: ["org_admin", "platform_admin"],
   },
-  // 客户记忆:读全角色可见,但订正/失效是 org_admin 才有的写操作
+  // 长期记忆:读全角色可见,但订正/失效是 org_admin 才有的写操作
   // (后端 memory.py require_role(ORG_ADMIN, PLATFORM_ADMIN))。
   // 这一页的主要用途就是审阅与纠正,给只读角色一个改不动的页面没有意义,
   // 因此导航按写权限收口,与「成员与角色」同口径。
   {
-    href: "/org/settings/customer-memory",
-    label: "客户记忆",
+    href: "/org/settings/memory",
+    label: "长期记忆",
     icon: BrainCircuit,
     roles: ["org_admin", "platform_admin"],
   },
-  // 「模型偏好」占位页已从导航隐藏(迭代3 C2):org 级模型路由覆盖落地后再恢复,
-  // 路由文件保留,admin 侧 /admin/providers 仍可配平台级路由。
 ];
 
 const areaSwitch: NavItem = {
-  href: "/app/projects",
-  label: "进入一线工作台",
+  href: "/app/chat",
+  label: "进入工作台",
   icon: BriefcaseBusiness,
-  roles: ["org_admin"],
 };
 
 export default function OrgLayout({ children }: { children: React.ReactNode }) {

@@ -45,8 +45,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
-import { errMsg } from "@/lib/utils";
-import { cn } from "@/lib/utils";
+import { cn, errMsg } from "@/lib/utils";
 import type {
   LlmProviderDto,
   ModelCapability,
@@ -793,12 +792,18 @@ function ProviderDetail({
           </div>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3.5">
             <div className="min-w-0 flex-1">
-              <div className="text-sm">API 密钥</div>
-              {provider.is_builtin && (
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  留空使用 .env 配置
-                </div>
-              )}
+              <div className="flex items-center gap-2 text-sm">
+                API 密钥
+                <ToneBadge tone={provider.has_api_key ? "success" : "muted"}>
+                  {provider.has_api_key ? "已配置" : "未配置"}
+                </ToneBadge>
+              </div>
+              {/* 读出面永远是掩码,把它原样保存回去 = 不修改密钥(见 lib/admin-types.ts) */}
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {provider.is_builtin
+                  ? "留空使用 .env 配置；已配置时显示为掩码,保持原样即不修改"
+                  : "已配置时显示为掩码,保持原样即不修改；清空则删除密钥"}
+              </div>
             </div>
             <Input
               className="w-72 shrink-0"

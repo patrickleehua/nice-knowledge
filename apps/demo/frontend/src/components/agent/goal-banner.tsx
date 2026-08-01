@@ -58,7 +58,7 @@ export function GoalBanner({
             onChange={(event) => setDraft(event.target.value)}
             rows={2}
             autoFocus
-            placeholder="例如：把这单报价推进到可提审"
+            placeholder="例如：整理这批资料并产出一份带引用的对比结论"
           />
           <div className="flex justify-end gap-2">
             <Button

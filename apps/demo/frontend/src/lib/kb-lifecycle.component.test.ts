@@ -46,7 +46,7 @@ describe("kbLifecycleApi", () => {
     const body = {
       expected_plan_hash: "a".repeat(64),
       reason: "retire source",
-      confirm_project_unlinks: true,
+      acknowledge_external_unlink: true,
     };
     await kbLifecycleApi.archive("kb-1", body);
     await kbLifecycleApi.restore("kb-1");

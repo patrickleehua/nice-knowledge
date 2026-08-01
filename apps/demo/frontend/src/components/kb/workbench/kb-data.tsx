@@ -203,22 +203,54 @@ export function useFactClaimPages(
 /** 统一知识检索；kbIds 不传表示搜索全部可见知识库。 */
 /**
  * 单次检索能取到的最大条数。与后端 search 服务层护栏 _MAX_TOP_K 对齐
- * (services/kb/search.py,也在 search_execution_manifest 里以 max_top_k 对外声明)。
+ * (nicekit/kb/search.py,也在 search_execution_manifest 里以 max_top_k 对外声明)。
  * 前端据此停止「加载更多」,并如实告诉用户为什么没有更多了。
  */
 export const SEARCH_TOP_K_LIMIT = 100;
 /** 「加载更多」每次追加的条数 */
 export const SEARCH_TOP_K_STEP = 20;
 
-export function useKbSearch(query: string, topK = 20, kbIds?: string[]) {
+/**
+ * 结构化召回通道的声明式过滤(POST /kb/search 与 /kb/answer 的 `structured`)。
+ *
+ * SDK 化改造(MIGRATION-PLAN B9-B14):TF 的 `StructuredSearchFilters` 带
+ * hotel_star / route_days / quote 等行业参数,已整体删除。现在是纯声明式:
+ * - `type_keys`:限定实体类型(已注册的 type_key);
+ * - `filters`:`{field, op, value}`,`field` 必须在该类型的 `filterable_fields` 里,
+ *   `op` 只能是 eq / min / max —— 非法字段或算子后端回 422 `invalid_structured_filter`;
+ * - `match_terms` / `must_include`:名称匹配与必含词。
+ */
+export type StructuredFilterOp = "eq" | "min" | "max";
+
+export interface StructuredFilter {
+  field: string;
+  op: StructuredFilterOp;
+  value: string | number | boolean;
+}
+
+export interface StructuredQuery {
+  type_keys?: string[];
+  filters?: StructuredFilter[];
+  match_terms?: string[];
+  must_include?: string[];
+}
+
+export function useKbSearch(
+  query: string,
+  topK = 20,
+  kbIds?: string[],
+  structured?: StructuredQuery,
+) {
   const normalizedQuery = query.trim();
   return useQuery({
-    queryKey: ["kb-search", normalizedQuery, topK, kbIds],
+    queryKey: ["kb-search", normalizedQuery, topK, kbIds, structured],
     queryFn: () =>
       api.post<SearchHit[]>("/kb/search", {
         query: normalizedQuery,
         top_k: topK,
         kb_ids: kbIds,
+        // 不传 = 不启用结构化通道(后端 StructuredQueryIn 全空时返回 None)
+        structured,
       }),
     enabled: normalizedQuery.length > 0,
     // 「加载更多」只是 topK 换 key;保留上一页数据,避免整列表退回骨架屏

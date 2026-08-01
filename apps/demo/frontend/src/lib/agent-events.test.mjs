@@ -42,7 +42,7 @@ test("coalesces real Reviewer events into tool execution details", () => {
       name: "image_generate",
       decision: "approve",
       reason_code: "reviewer_approved",
-      rationale: "用户明确要求生成当前项目宣传图。",
+      rationale: "用户明确要求生成这张配图。",
       risk_flags: ["external_cost"],
       override_eligible: false,
       circuit_breaker: false,
@@ -64,7 +64,7 @@ test("coalesces real Reviewer events into tool execution details", () => {
   assert.equal(timeline.items[0].run.permission.reviewer.decision, "approve");
   assert.equal(
     timeline.items[0].run.permission.reviewer.rationale,
-    "用户明确要求生成当前项目宣传图。",
+    "用户明确要求生成这张配图。",
   );
 });
 
@@ -166,7 +166,7 @@ test("coalesces denial, circuit and exact override lifecycle by original tool ca
   const override = {
     candidate_id: "candidate-1",
     tool_call_id: "call-denied",
-    name: "ota_apply",
+    name: "external_write",
     action_hash: "b".repeat(64),
   };
   const firstRun = [
@@ -174,14 +174,14 @@ test("coalesces denial, circuit and exact override lifecycle by original tool ca
       type: "tool.call",
       seq: 1,
       tool_call_id: "call-denied",
-      name: "ota_apply",
+      name: "external_write",
       input: {},
     },
     {
       type: "reviewer.circuit_breaker",
       seq: 2,
       tool_call_id: "call-denied",
-      name: "ota_apply",
+      name: "external_write",
       denial_count: 3,
       action_hash: "b".repeat(64),
     },
@@ -189,7 +189,7 @@ test("coalesces denial, circuit and exact override lifecycle by original tool ca
       type: "reviewer.decision",
       seq: 3,
       tool_call_id: "call-denied",
-      name: "ota_apply",
+      name: "external_write",
       decision: "deny",
       reason_code: "reviewer_circuit_breaker",
       rationale: "本轮已连续三次未通过独立审批。",
@@ -207,7 +207,7 @@ test("coalesces denial, circuit and exact override lifecycle by original tool ca
       candidate_id: "candidate-1",
       tool_call_id: "override-call",
       override_of: "call-denied",
-      name: "ota_apply",
+      name: "external_write",
       ok: false,
       reason_code: "reviewer_override_not_allowed",
       action_hash: "b".repeat(64),
@@ -295,7 +295,7 @@ test("builds concise anchors for conversation quick navigation", () => {
   const groups = groupConversationItems([
     { key: "u1", role: "user", content: "请帮我创建一个新加坡五日项目" },
     { key: "a1", role: "assistant", content: "好的" },
-    { key: "u2", role: "user", content: "继续生成报价" },
+    { key: "u2", role: "user", content: "继续汇总检索结果" },
     { key: "a2", role: "assistant", content: "完成" },
   ]);
 
@@ -308,7 +308,7 @@ test("builds concise anchors for conversation quick navigation", () => {
     {
       id: "conversation-turn-2",
       groupIndex: 2,
-      label: "继续生成报价",
+      label: "继续汇总检索结果",
     },
   ]);
 });
@@ -326,22 +326,22 @@ test("builds semantic waterfall blocks without rendering token deltas", () => {
       type: "tool.call",
       seq: 4,
       tool_call_id: "tool-1",
-      name: "kb_retrieve",
+      name: "kb_search",
       input: {},
     },
     {
       type: "tool.progress",
       seq: 5,
       parent_tool_call_id: "tool-1",
-      text: "检索目的地资料",
+      text: "检索背景资料",
     },
     {
       type: "tool.result",
       seq: 6,
       tool_call_id: "tool-1",
-      name: "kb_retrieve",
+      name: "kb_search",
       ok: true,
-      output: { counts: { destinations: 3 } },
+      output: { counts: { chunks: 3 } },
     },
     { type: "text.delta", seq: 7, text: "逐字回答增量" },
     { type: "text", seq: 8, text: "资料读取完成。" },
@@ -354,7 +354,7 @@ test("builds semantic waterfall blocks without rendering token deltas", () => {
   assert.equal(timeline.items[0].text, "先分析需求");
   assert.equal(timeline.items[1].text, "我先读取项目资料。");
   assert.equal(timeline.items[2].run.status, "ok");
-  assert.deepEqual(timeline.items[2].run.progress, ["检索目的地资料"]);
+  assert.deepEqual(timeline.items[2].run.progress, ["检索背景资料"]);
   assert.equal(timeline.finalText, "资料读取完成。");
   assert.equal(JSON.stringify(timeline).includes("逐字"), false);
 });
@@ -382,24 +382,29 @@ test("classifies transport deltas as non-semantic events", () => {
   );
 });
 
-test("keeps stage and error records in the execution waterfall", () => {
+test("keeps error records in the execution waterfall", () => {
   const timeline = buildActivityTimeline([
-    {
-      type: "stage.update",
-      seq: 1,
-      project_id: "project-1",
-      project_status: "itinerary",
-      stage: "itinerary",
-    },
     { type: "error", seq: 2, message: "生成失败" },
     { type: "text", seq: 3, text: "请补充资料" },
   ]);
 
   assert.deepEqual(
     timeline.items.map((item) => item.type),
-    ["stage", "error"],
+    ["error"],
   );
   assert.equal(timeline.finalText, "请补充资料");
+});
+
+// stage.update 事件已从后端删除(MIGRATION-PLAN §5.4:SDK 不按工具名前缀推导
+// 业务阶段)。未知事件类型必须被静默丢弃而不是崩掉整条时间线。
+test("drops unknown event types instead of throwing", () => {
+  const timeline = buildActivityTimeline([
+    { type: "stage.update", seq: 1, stage: "whatever" },
+    { type: "text", seq: 2, text: "正文" },
+  ]);
+
+  assert.deepEqual(timeline.items, []);
+  assert.equal(timeline.finalText, "正文");
 });
 
 test("orders replayed execution records by SSE sequence", () => {
@@ -409,30 +414,23 @@ test("orders replayed execution records by SSE sequence", () => {
       type: "tool.result",
       seq: 6,
       tool_call_id: "tool-1",
-      name: "project_create",
+      name: "kb_search",
       ok: true,
-      output: { title: "新加坡项目" },
+      output: { hits: 3 },
     },
-    { type: "thought", seq: 2, text: "先梳理客户信息" },
+    { type: "thought", seq: 2, text: "先梳理已知信息" },
     {
       type: "tool.call",
       seq: 4,
       tool_call_id: "tool-1",
-      name: "project_create",
+      name: "kb_search",
       input: {},
-    },
-    {
-      type: "stage.update",
-      seq: 7,
-      project_id: "project-1",
-      project_status: "demand",
-      stage: "demand",
     },
   ]);
 
   assert.deepEqual(
     timeline.items.map((item) => `${item.type}:${item.seq}`),
-    ["thought:2", "tool:4", "stage:7", "error:8"],
+    ["thought:2", "tool:4", "error:8"],
   );
   assert.equal(timeline.items[1].run.status, "ok");
 });
@@ -1106,7 +1104,7 @@ test("renders goal continuation input as a system notice, not a user bubble", ()
       id: "reply",
       sequence: 2,
       role: "assistant",
-      content: "已核对报价。",
+      content: "已核对结论。",
       tool_name: null,
       tool_call_id: null,
       tool_input: null,

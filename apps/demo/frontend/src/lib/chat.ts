@@ -121,9 +121,15 @@ export interface PlanStep {
 export interface ChatSessionOut {
   id: string;
   agent_card_id: string;
-  project_id: string | null;
-  /** 只绑客户不绑旅行计划 = 售前咨询会话(客户未立项也能沉淀客户记忆) */
-  customer_id: string | null;
+  /**
+   * 会话绑定的宿主业务作用域。SDK 不认识宿主的表,`scope_type` 是宿主自定的
+   * 类型名(如 "workspace"/"ticket"),两者要么同时给要么都不给——只给一个
+   * 后端直接 422。
+   */
+  scope_type: string | null;
+  scope_id: string | null;
+  /** general = 未绑作用域;scoped = 已绑(创建事实,之后不改) */
+  origin_mode: "general" | "scoped";
   title: string;
   status: string;
   pending_confirmation: PendingConfirmation | null;
@@ -238,6 +244,11 @@ export type PermissionProfile =
   "request_approval" | "auto_review" | "full_access" | "custom";
 export type PermissionDecision = "allow" | "auto_review" | "ask_user" | "deny";
 export type ToolRisk = "routine" | "sensitive" | "critical";
+/**
+ * 授权范围三档(与 lib/agent-permissions.ts 的 PermissionScope 同值)。
+ * `resource` = chat_sessions.scope_type/scope_id 指向的宿主作用域根。
+ */
+export type PermissionScopeValue = "session" | "resource" | "organization";
 export type ToolCategory =
   | "local_data"
   | "network"
@@ -248,14 +259,17 @@ export type ToolCategory =
   | "export";
 
 export interface PermissionActionScope {
-  mode: "general" | "project";
+  mode: "general" | "scoped";
   org_id: string;
   session_id: string;
-  bound_project_id: string | null;
-  target_project_id: string | null;
+  /** 会话创建时绑定的作用域根(chat_sessions.scope_id) */
+  bound_scope_id: string | null;
+  /** 本次调用真正作用到的作用域根(ResourceResolver 结果,回落 bound) */
+  target_scope_id: string | null;
   resource_type: string | null;
   resource_id: string | null;
-  creates_project: boolean;
+  /** 该工具是否会创建一个新的作用域根(ToolPermissionSpec.creates_scope_root) */
+  creates_scope_root: boolean;
   resolution_error: string | null;
 }
 
@@ -263,7 +277,7 @@ export interface PermissionPolicySnapshot {
   policy_id: string | null;
   policy_version: number;
   profile: PermissionProfile;
-  scope: "session" | "project" | "organization";
+  scope: PermissionScopeValue;
   expires_at: string | null;
   grant_ids: string[];
   allowed_profiles: PermissionProfile[];
@@ -410,7 +424,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
       phase: "route" | "final";
     })
   | (BaseEvent & {
@@ -433,7 +447,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
     })
   | (BaseEvent & {
       type: "reviewer.requested";
@@ -465,7 +479,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
     })
   | (BaseEvent & {
       type: "reviewer.circuit_breaker";
@@ -494,7 +508,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
     })
   | (BaseEvent & {
       type:
@@ -523,7 +537,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
     })
   | (BaseEvent & {
       type: "approval.legacy.decision";
@@ -541,7 +555,7 @@ export type AgentEvent =
       policy_id: string | null;
       policy_version: number;
       profile: PermissionProfile;
-      permission_scope: "session" | "project" | "organization";
+      permission_scope: PermissionScopeValue;
     })
   // 运行中输入队列:input.queued/updated/deleted 由 API 直落 chat_events(重放可见),
   // input.consuming/consumed/skipped 走 run 的实时 SSE 通道
@@ -600,12 +614,6 @@ export type AgentEvent =
   // agent 执行计划全量更新(卡 L)
   | (BaseEvent & { type: "plan.update"; steps: PlanStep[] })
   | (BaseEvent & { type: "plan.step.continued"; step_id: string })
-  | (BaseEvent & {
-      type: "stage.update";
-      project_id: string;
-      project_status: string;
-      stage: "demand" | "itinerary" | "quote" | "docs";
-    })
   | (BaseEvent & {
       type: "turn.done";
       reason:
@@ -688,7 +696,8 @@ export interface RuntimeToolRequest {
 export function sendChatMessage(
   sessionId: string,
   content: string,
-  context: { project_id?: string } | undefined,
+  // 切换会话当前绑定的宿主作用域;scope_type 与 scope_id 必须成对给,否则 422
+  context: { scope_type: string; scope_id: string } | undefined,
   onEvent: (event: AgentEvent) => void,
   onRun: (runId: string) => void,
   signal?: AbortSignal,
@@ -796,65 +805,27 @@ export function completeSessionGoal(
   );
 }
 
+// 内置通用工具的展示名(nicekit/agent/builtin_tools.py 的 17 个)。
+// 这只是**兜底文案表**:后端 ToolDef 自带 label,宿主注册的业务工具会经
+// GET /admin/agent-tools 下发;查不到的工具名一律原样展示,不猜、不隐藏。
 export const TOOL_LABELS: Record<string, string> = {
+  kb_list: "知识库列表",
   kb_search: "知识库检索",
-  project_create: "创建旅行计划",
-  project_get: "旅行计划详情",
-  project_list: "旅行计划列表",
-  project_search: "旅行计划检索",
-  customer_search: "客户检索",
-  customer_get: "客户档案",
-  customer_history: "客户历史",
-  demand_parse: "需求解析",
-  demand_patch: "回填需求",
-  kb_retrieve: "需求驱动检索",
   kb_image_inspect: "核验知识图片",
-  business_media_select: "选择业务知识图片",
-  itinerary_generate: "生成行程方案",
-  itinerary_select: "选定并细化方案",
-  itinerary_confirm: "确认行程",
-  itinerary_detail_get: "行程明细",
-  itinerary_acknowledge: "确认行程事项",
-  itinerary_validate: "校验行程",
-  quote_generate: "生成报价",
-  quote_get: "报价详情",
-  quote_cost_item_add: "新增成本行",
-  quote_cost_item_update: "修改成本行",
-  quote_cost_item_delete: "删除成本行",
-  quote_cost_item_lock: "锁定成本行",
-  quote_cost_item_unlock: "解锁成本行",
-  quote_recalculate: "重算报价",
-  quote_validate: "校验报价",
-  quote_submit_review: "提交审价",
-  quote_comment_add: "审核留言",
-  quote_versions_get: "报价版本历史",
-  quote_review_trail_get: "审价轨迹",
-  ota_compare_run: "发起OTA比价",
-  ota_compare_get: "查看比价快照",
-  ota_apply: "回填OTA价格",
-  itinerary_detail_patch: "编辑行程终版",
-  itinerary_unconfirm: "撤销行程确认",
-  itinerary_versions_get: "行程版本历史",
-  project_status_update: "推进旅行计划状态",
   retrieval_get: "检索依据",
-  pipeline_list: "任务列表",
-  pipeline_retry: "重试任务",
-  pipeline_cancel: "取消任务",
-  render_generate: "生成文档",
-  render_job_retry: "重试文档任务",
-  template_draft: "起草模板",
-  template_list: "查看模板",
-  export_list: "文档列表",
-  export_bundle_create: "打包导出",
-  skills_list: "技能列表",
-  skill_view: "读取技能",
-  ask_user: "向用户确认",
   plan_update: "更新计划",
   update_goal: "更新会话目标",
   cronjob: "定时任务",
+  memory_search: "检索长期记忆",
+  memory_write: "记录长期记忆",
+  memory_forget: "标记记忆失效",
+  ask_user: "向用户确认",
+  skills_list: "技能列表",
+  skill_view: "读取技能",
   web_search: "联网搜索",
   web_fetch: "网页读取",
   image_generate: "生成图片",
+  weather_get: "天气预报",
   // 子 agent 委派:后端运行时注入的工具(不在任何卡白名单里)
   Agent: "委派专员",
 };

@@ -36,7 +36,7 @@ export const KB_VIEWS = [
     sidebar: "documents",
   },
   { key: "images", label: "图片", icon: Images, group: "content" },
-  // 实体视图内部已自带目的地列(entities-tab.tsx),不再重复给一个左栏
+  // 实体视图内部已自带类型切换,不再重复给一个左栏
   { key: "entities", label: "实体", icon: Database, group: "content" },
   {
     key: "wiki",

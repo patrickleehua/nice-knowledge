@@ -8,7 +8,6 @@ import {
   Globe,
   Loader2,
   MessageSquareText,
-  Milestone,
   ShieldAlert,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -35,18 +34,11 @@ import {
   agentMarkdownComponents,
   sanitizeAgentMarkdown,
 } from "./agent-markdown";
-import { BusinessResult } from "./business-result";
 import { GeneratedImagePlaceholder, GeneratedImages } from "./generated-images";
+import { hasToolResultRenderer, ToolResult } from "./result-renderers";
 import { defaultActivityDisclosureOpen } from "./run-section-presentation";
 import { ToolRunCard } from "./tool-run-card";
-import { businessResultKind, toolResultSummary } from "./tool-presentation";
-
-const STAGE_LABELS = {
-  demand: "需求阶段",
-  itinerary: "行程阶段",
-  quote: "报价阶段",
-  docs: "交付阶段",
-} as const;
+import { toolResultSummary } from "./tool-presentation";
 
 function timeValue(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -98,7 +90,8 @@ function toolActivitySummary(tools: ToolRun[]): string | null {
     if (tool.status === "running") return toolLabel(tool.name);
     if (tool.status === "waiting") return `${toolLabel(tool.name)} · 等待审批`;
     if (tool.status === "failed") return `${toolLabel(tool.name)} · 执行失败`;
-    if (businessResultKind(tool.name, tool.output)) return toolLabel(tool.name);
+    if (hasToolResultRenderer(tool.name, tool.output))
+      return toolLabel(tool.name);
     return `${toolLabel(tool.name)} · ${toolResultSummary(tool.name, tool.output)}`;
   }
   const labels = [...new Set(tools.map((tool) => toolLabel(tool.name)))];
@@ -295,7 +288,6 @@ function ActivityDot({ item }: { item: ActivityTimelineItem }) {
     ) : (
       <Check className="size-3.5" />
     );
-  if (item.type === "stage") return <Milestone className="size-3.5" />;
   if (item.type === "approval")
     return isApprovalBundle(item.pending) &&
       item.pending.status === "completed" ? (
@@ -322,12 +314,14 @@ function sameConfirmation(
 
 function ActivityWaterfall({
   items,
-  projectId,
+  scopeType,
+  scopeId,
   busy,
   onOverride,
 }: {
   items: ActivityTimelineItem[];
-  projectId?: string;
+  scopeType?: string | null;
+  scopeId?: string | null;
   busy: boolean;
   onOverride?: (override: ReviewerOverride) => void;
 }) {
@@ -358,21 +352,13 @@ function ActivityWaterfall({
               ) : item.type === "tool" ? (
                 <ToolRunCard
                   run={item.run}
-                  projectId={projectId}
-                  showBusinessResult={false}
+                  scopeType={scopeType}
+                  scopeId={scopeId}
+                  showToolResult={false}
                   showStatusIcon={false}
                   busy={busy}
                   onOverride={onOverride}
                 />
-              ) : item.type === "stage" ? (
-                <div className="px-1 py-1 text-xs">
-                  <span className="font-medium text-foreground/80">
-                    已更新 {STAGE_LABELS[item.stage]}
-                  </span>
-                  <span className="ml-1.5 text-muted-foreground">
-                    · {item.projectStatus}
-                  </span>
-                </div>
               ) : item.type === "approval" ? (
                 <ResolvedApproval pending={item.pending} />
               ) : (
@@ -395,10 +381,11 @@ export function RunSections({
   busy = streaming,
   startedAt,
   completedAt,
-  projectId,
+  scopeType,
+  scopeId,
   permissionProjection,
   imageArtifacts: suppliedImageArtifacts,
-  businessResultKeys,
+  toolResultKeys,
   showExecutionActivity = true,
   pending,
   onOverride,
@@ -410,10 +397,12 @@ export function RunSections({
   busy?: boolean;
   startedAt?: string | null;
   completedAt?: string | null;
-  projectId?: string;
+  scopeType?: string | null;
+  scopeId?: string | null;
   permissionProjection?: PermissionTimelineProjection;
   imageArtifacts?: ImageArtifact[];
-  businessResultKeys?: ReadonlyMap<string, string>;
+  /** 已在别处渲染过的工具结果去重键(避免同一结果重复出现) */
+  toolResultKeys?: ReadonlyMap<string, string>;
   showExecutionActivity?: boolean;
   pending?: PendingConfirmation | null;
   onOverride?: (override: ReviewerOverride) => void;
@@ -463,10 +452,9 @@ export function RunSections({
     ...timeline.items.flatMap((item) =>
       item.type === "tool" &&
       item.run.status === "ok" &&
-      (businessResultKeys === undefined ||
-        businessResultKeys.has(item.run.id)) &&
-      businessResultKind(item.run.name, item.run.output) !== null
-        ? [{ type: "business" as const, seq: item.seq, tool: item.run }]
+      (toolResultKeys === undefined || toolResultKeys.has(item.run.id)) &&
+      hasToolResultRenderer(item.run.name, item.run.output)
+        ? [{ type: "result" as const, seq: item.seq, tool: item.run }]
         : [],
     ),
     ...imageArtifacts.flatMap((artifact) =>
@@ -553,7 +541,8 @@ export function RunSections({
             <div className="mt-1 ml-1 py-1" aria-live="polite">
               <ActivityWaterfall
                 items={waterfallItems}
-                projectId={projectId}
+                scopeType={scopeType}
+                scopeId={scopeId}
                 busy={busy}
                 onOverride={onOverride}
               />
@@ -563,15 +552,15 @@ export function RunSections({
       )}
 
       {contextualResults.map((result) =>
-        result.type === "business" ? (
-          <BusinessResult
+        result.type === "result" ? (
+          <ToolResult
             key={
-              businessResultKeys?.get(result.tool.id) ??
-              `business-${result.tool.id}`
+              toolResultKeys?.get(result.tool.id) ?? `result-${result.tool.id}`
             }
             name={result.tool.name}
-            output={result.tool.output}
-            projectId={projectId}
+            output={result.tool.output as Record<string, unknown>}
+            scopeType={scopeType}
+            scopeId={scopeId}
           />
         ) : result.artifact.status === "running" ? (
           <GeneratedImagePlaceholder

@@ -61,12 +61,12 @@ function LoginForm() {
       <CardHeader>
         <div className="mb-2 flex items-center gap-2">
           <span className="flex size-8 items-center justify-center rounded-md bg-primary text-base font-bold text-primary-foreground">
-            T
+            N
           </span>
-          <span className="text-lg font-semibold">TravelFlow AI</span>
+          <span className="text-lg font-semibold">nicekit demo</span>
         </div>
         <CardTitle className="text-base font-normal text-muted-foreground">
-          登录旅游产品生产工作台
+          登录多租户 Agent + 知识库工作台
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -108,7 +108,11 @@ function LoginForm() {
             <label className="text-sm font-medium" htmlFor="org_slug">
               组织标识(可选,多组织成员使用)
             </label>
-            <Input id="org_slug" placeholder="如 platform" {...register("org_slug")} />
+            <Input
+              id="org_slug"
+              placeholder="如 platform / demo"
+              {...register("org_slug")}
+            />
           </div>
           <Button type="submit" className="w-full" disabled={loading}>
             {loading && <Loader2 className="size-4 animate-spin" />}

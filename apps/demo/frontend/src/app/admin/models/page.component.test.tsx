@@ -128,16 +128,16 @@ const TASK_CATALOG: ModelRouteTaskDto[] = [
     is_system: false,
   },
   {
-    task: "pipeline.itinerary.options",
-    label: "行程多方案生成",
-    description: "生成多个行程候选",
+    task: "pipeline.report.outline",
+    label: "文档摘要生成",
+    description: "生成多个摘要候选",
     category: "pipeline",
     is_system: false,
   },
   {
-    task: "pipeline.itinerary.detail",
-    label: "行程终版细化",
-    description: "细化选定行程",
+    task: "pipeline.report.detail",
+    label: "摘要终版润色",
+    description: "润色选定摘要",
     category: "pipeline",
     is_system: false,
   },
@@ -360,10 +360,10 @@ describe("AdminModelsPage system capability boards", () => {
     expect(within(dialog).queryByLabelText("任务标识")).toBeNull();
 
     fireEvent.change(within(dialog).getByLabelText("搜索任务"), {
-      target: { value: "行程" },
+      target: { value: "摘要" },
     });
-    expect(within(dialog).getByText("行程多方案生成")).toBeDefined();
-    expect(within(dialog).getByText("行程终版细化")).toBeDefined();
+    expect(within(dialog).getByText("文档摘要生成")).toBeDefined();
+    expect(within(dialog).getByText("摘要终版润色")).toBeDefined();
     expect(within(dialog).queryByText("Agent 操作审批复核")).toBeNull();
 
     fireEvent.click(
@@ -377,7 +377,7 @@ describe("AdminModelsPage system capability boards", () => {
 
     await waitFor(() => {
       expect(apiMocks.post).toHaveBeenCalledWith("/admin/models/batch", {
-        tasks: ["pipeline.itinerary.options", "pipeline.itinerary.detail"],
+        tasks: ["pipeline.report.outline", "pipeline.report.detail"],
         org_id: null,
         primary_provider: "chat-openai",
         primary_model: "chat-model",

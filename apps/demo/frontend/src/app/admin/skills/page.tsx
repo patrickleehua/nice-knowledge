@@ -185,7 +185,7 @@ function SkillEditorDialog({
                 className="mt-1 font-mono"
                 value={newSlug}
                 onChange={(event) => setNewSlug(event.target.value)}
-                placeholder="如 itinerary-style-guide"
+                placeholder="如 code-review-guide"
               />
               {newSlug.trim() && !slugValid && (
                 <p className="mt-1 text-xs text-destructive">

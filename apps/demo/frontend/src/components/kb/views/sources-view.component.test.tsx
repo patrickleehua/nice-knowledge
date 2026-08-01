@@ -273,8 +273,24 @@ beforeEach(() => {
       return Promise.resolve([
         {
           id: "entity-type-1",
-          type_key: "travel_policy",
-          display_name: "行程政策",
+          type_key: "expense_policy",
+          display_name: "报销政策",
+          description: null,
+          field_schema: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          },
+          filterable_fields: [],
+          card_template: null,
+          review_policy: "human",
+          is_builtin: false,
+          is_own: true,
+        },
+        {
+          id: "entity-type-2",
+          type_key: "incident_report",
+          display_name: "事故报告",
           description: null,
           field_schema: {
             type: "object",
@@ -309,7 +325,7 @@ describe("SourcesView staged ingestion workflow", () => {
     documents = [];
     apiMocks.postForm.mockResolvedValue(
       makeDocument({
-        filename: "线路.docx",
+        filename: "制度.docx",
         doc_type: "unclassified",
         status: "staged",
         lifecycle_status: "active",
@@ -326,7 +342,7 @@ describe("SourcesView staged ingestion workflow", () => {
     fireEvent.change(uploadInput!, {
       target: {
         files: [
-          new File(["route"], "线路.docx", {
+          new File(["route"], "制度.docx", {
             type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           }),
         ],
@@ -349,7 +365,7 @@ describe("SourcesView staged ingestion workflow", () => {
     const secondId = "123e4567-e89b-42d3-a456-426614174099";
     documents = [
       makeDocument({
-        filename: "华东线路.docx",
+        filename: "员工手册.docx",
         doc_type: "unclassified",
         status: "staged",
         lifecycle_status: "active",
@@ -357,7 +373,7 @@ describe("SourcesView staged ingestion workflow", () => {
       }),
       makeDocument({
         id: secondId,
-        filename: "行程规则.docx",
+        filename: "值班制度.docx",
         doc_type: "unclassified",
         status: "staged",
         lifecycle_status: "active",
@@ -400,37 +416,37 @@ describe("SourcesView staged ingestion workflow", () => {
     );
     renderSourcesView();
 
-    await screen.findByText("华东线路.docx");
+    await screen.findByText("员工手册.docx");
     fireEvent.click(screen.getByRole("checkbox", { name: "全选待处理文件" }));
     fireEvent.click(screen.getByRole("combobox", { name: "批量文档类型" }));
-    const routeTypeOption = await screen.findByRole("option", {
-      name: "成熟线路",
+    const typedOption = await screen.findByRole("option", {
+      name: "报销政策",
     });
-    fireEvent.pointerDown(routeTypeOption);
-    fireEvent.pointerUp(routeTypeOption);
-    fireEvent.click(routeTypeOption);
+    fireEvent.pointerDown(typedOption);
+    fireEvent.pointerUp(typedOption);
+    fireEvent.click(typedOption);
 
     await waitFor(() => {
       expect(apiMocks.post).toHaveBeenCalledWith(
         "/kb/documents/classifications",
         {
           items: [
-            { document_id: DOC_ID, doc_type: "route_template" },
-            { document_id: secondId, doc_type: "route_template" },
+            { document_id: DOC_ID, doc_type: "expense_policy" },
+            { document_id: secondId, doc_type: "expense_policy" },
           ],
         },
       );
     });
 
     const secondTypeSelect = await screen.findByRole("combobox", {
-      name: "设置 行程规则.docx 的文档类型",
+      name: "设置 值班制度.docx 的文档类型",
     });
     await waitFor(() =>
       expect(secondTypeSelect).toHaveProperty("disabled", false),
     );
     fireEvent.click(secondTypeSelect);
     const customTypeOption = await screen.findByRole("option", {
-      name: "行程政策",
+      name: "事故报告",
     });
     fireEvent.pointerDown(customTypeOption);
     fireEvent.pointerUp(customTypeOption);
@@ -440,7 +456,7 @@ describe("SourcesView staged ingestion workflow", () => {
       expect(apiMocks.post).toHaveBeenLastCalledWith(
         "/kb/documents/classifications",
         {
-          items: [{ document_id: secondId, doc_type: "travel_policy" }],
+          items: [{ document_id: secondId, doc_type: "incident_report" }],
         },
       );
     });
@@ -516,8 +532,8 @@ describe("SourcesView staged ingestion workflow", () => {
   test("restores a persisted staged classification after refresh", async () => {
     documents = [
       makeDocument({
-        filename: "已分类线路.docx",
-        doc_type: "route_template",
+        filename: "已分类政策.docx",
+        doc_type: "expense_policy",
         status: "staged",
         lifecycle_status: "active",
         latest_operation: null,
@@ -526,12 +542,12 @@ describe("SourcesView staged ingestion workflow", () => {
     renderSourcesView();
 
     const typeSelect = await screen.findByRole("combobox", {
-      name: "设置 已分类线路.docx 的文档类型",
+      name: "设置 已分类政策.docx 的文档类型",
     });
-    expect(typeSelect.textContent).toContain("成熟线路");
+    expect(typeSelect.textContent).toContain("报销政策");
     fireEvent.click(
       screen.getByRole("checkbox", {
-        name: "选择待处理文件 已分类线路.docx",
+        name: "选择待处理文件 已分类政策.docx",
       }),
     );
     expect(screen.getByRole("button", { name: "排入解析队列" })).toHaveProperty(
@@ -541,8 +557,8 @@ describe("SourcesView staged ingestion workflow", () => {
   });
 });
 
-describe("SourcesView route extraction workflow", () => {
-  test("queues route reclassification from a completed general document", async () => {
+describe("SourcesView typed re-extraction workflow", () => {
+  test("queues typed re-extraction from a completed general document", async () => {
     documents = [
       makeDocument({
         lifecycle_status: "active",
@@ -553,7 +569,7 @@ describe("SourcesView route extraction workflow", () => {
       document_id: DOC_ID,
       revision_id: "revision-1",
       previous_doc_type: "general",
-      target_doc_type: "route_template",
+      target_doc_type: "expense_policy",
       run_id: "run-1",
       status: "queued",
       error: null,
@@ -565,19 +581,23 @@ describe("SourcesView route extraction workflow", () => {
     renderSourcesView();
 
     await openDocumentMenu();
-    fireEvent.click(await screen.findByText("抽取为线路知识"));
+    fireEvent.click(await screen.findByText("重新抽取为…"));
     expect(
-      await screen.findByRole("heading", { name: "抽取为线路知识？" }),
+      await screen.findByRole("heading", { name: "重新抽取这份文档？" }),
     ).toBeDefined();
     expect(
       screen.getByText(/不会重新上传、改写源文件或改变当前已发布快照/),
     ).toBeDefined();
+    // 目标类型开放:内置 DocType + 注册表里的实体类型 key
+    fireEvent.change(screen.getByRole("combobox", { name: "目标抽取类型" }), {
+      target: { value: "expense_policy" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "开始抽取" }));
 
     await waitFor(() => {
       expect(apiMocks.post).toHaveBeenCalledWith(
         `/kb/documents/${DOC_ID}/reclassify`,
-        { target_doc_type: "route_template" },
+        { target_doc_type: "expense_policy" },
       );
     });
   });
@@ -593,7 +613,7 @@ describe("SourcesView route extraction workflow", () => {
     renderSourcesView();
 
     expect(
-      await screen.findByRole("heading", { name: "抽取为线路知识？" }),
+      await screen.findByRole("heading", { name: "重新抽取这份文档？" }),
     ).toBeDefined();
     expect(urlState.set).toHaveBeenCalledWith({ reclassify: null });
   });
@@ -607,7 +627,7 @@ describe("SourcesView route extraction workflow", () => {
           run_id: "run-1",
           revision_id: "revision-1",
           previous_doc_type: "general",
-          target_doc_type: "route_template",
+          target_doc_type: "expense_policy",
           status: "queued",
           error: null,
           retryable: false,
@@ -618,14 +638,14 @@ describe("SourcesView route extraction workflow", () => {
       }),
       makeDocument({
         id: "doc-failed",
-        filename: "失败线路.docx",
+        filename: "失败政策.docx",
         lifecycle_status: "active",
         latest_operation: null,
         latest_reclassification: {
           run_id: "run-2",
           revision_id: "revision-2",
           previous_doc_type: "general",
-          target_doc_type: "route_template",
+          target_doc_type: "expense_policy",
           status: "failed",
           error: "结构化输出不符合约束",
           retryable: true,
@@ -637,9 +657,13 @@ describe("SourcesView route extraction workflow", () => {
     ];
     renderSourcesView();
 
-    expect(await screen.findByText("线路知识抽取已排队")).toBeDefined();
     expect(
-      await screen.findByText(/线路知识抽取失败：结构化输出不符合约束/),
+      await screen.findByText("已排队重新抽取为「报销政策」"),
+    ).toBeDefined();
+    expect(
+      await screen.findByText(
+        /重新抽取为「报销政策」失败：结构化输出不符合约束/,
+      ),
     ).toBeDefined();
   });
 });

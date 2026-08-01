@@ -5,15 +5,15 @@ import type { KnowledgeAnswerSource, SearchHit } from "@/lib/types";
 
 function hit(name: string): SearchHit {
   return {
-    kind: "hotel",
+    kind: "policy",
     layer: "tenant",
     kb_id: "kb-1",
-    source: `hotel/${name}`,
+    source: `entity/${name}`,
     confidence: 0.9,
     data: {
       id: `id-${name}`,
       name,
-      city: "巴黎",
+      department: "合规",
       source_doc_id: "doc-1",
       // SearchHitData 必带 scores(检索排序分),夹具缺这项会让 tsc 整体失败
       scores: { native: {}, rrf: 0.5, rerank: null },
@@ -23,7 +23,7 @@ function hit(name: string): SearchHit {
       revision_id: "rev-1",
       source_doc_id: "doc-1",
       source_sha256: "hash",
-      quote_text: `${name} 参考价 220 欧元`,
+      quote_text: `${name} 条款 220 号`,
       chunk_id: "chunk-1",
       page: 2,
       start_line: 4,
@@ -34,8 +34,8 @@ function hit(name: string): SearchHit {
 }
 
 const sources: KnowledgeAnswerSource[] = [
-  { ref: 1, hit: hit("左岸酒店") },
-  { ref: 2, hit: hit("右岸酒店") },
+  { ref: 1, hit: hit("左岸制度") },
+  { ref: 2, hit: hit("右岸制度") },
 ];
 
 describe("KnowledgeAnswerPanel", () => {
@@ -43,7 +43,7 @@ describe("KnowledgeAnswerPanel", () => {
     const { container } = render(
       <KnowledgeAnswerPanel
         status="success"
-        answerText="推荐右岸酒店，参考价 220 EUR [2]。"
+        answerText="推荐右岸制度，见 220 号条款 [2]。"
         sources={sources}
       />,
     );
@@ -55,8 +55,8 @@ describe("KnowledgeAnswerPanel", () => {
     // 来源卡按编号可定位(source 整包传入,ref 编号不能被 React 吞掉)
     const card = container.querySelector("#source-2");
     expect(card).not.toBeNull();
-    expect(card?.textContent).toContain("右岸酒店");
-    expect(card?.textContent).toContain("右岸酒店 参考价 220 欧元");
+    expect(card?.textContent).toContain("右岸制度");
+    expect(card?.textContent).toContain("右岸制度 条款 220 号");
     expect(screen.getByText("基于 2 个可核验来源")).toBeDefined();
   });
 

@@ -42,7 +42,7 @@ export function WorkbenchShell({
 }: {
   /** 顶部视图导航 */
   tabs: ReactNode;
-  /** 左栏(文档树 / 页面列表 / 目的地列表);不传表示当前视图不需要 */
+  /** 左栏(文档树 / 页面列表 / 实体列表);不传表示当前视图不需要 */
   sidebar?: WorkbenchSidebar;
   /** 底部常驻发布状态条 */
   statusBar?: ReactNode;

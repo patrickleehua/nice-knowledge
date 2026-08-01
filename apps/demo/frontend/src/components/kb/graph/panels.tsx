@@ -37,7 +37,11 @@ import {
   graphEvidenceLocation,
   graphValidityLabel,
 } from "./graph-edge-utils.mjs";
-import { GRAPH_TYPE_LABELS, type SigmaGraphPalette } from "./graph-palette";
+import {
+  GRAPH_TYPE_LABELS,
+  sigmaTypeColor,
+  type SigmaGraphPalette,
+} from "./graph-palette";
 
 export type GraphColorMode = "type" | "community";
 
@@ -437,7 +441,7 @@ export function NodeDetailPanel({
               className="inline-block size-2.5 shrink-0 rounded-full"
               style={{
                 background:
-                  palette.types[info.entityType] ?? palette.fallbackType,
+                  sigmaTypeColor(palette, info.entityType),
               }}
             />
             <span className="truncate text-sm font-medium">{info.label}</span>
@@ -477,7 +481,7 @@ export function NodeDetailPanel({
                   className="inline-block size-2 shrink-0 rounded-full"
                   style={{
                     background:
-                      palette.types[r.entityType] ?? palette.fallbackType,
+                      sigmaTypeColor(palette, r.entityType),
                   }}
                 />
                 <span className="truncate">{r.label}</span>

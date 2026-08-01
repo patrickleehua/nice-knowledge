@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudSun, Globe, ImageIcon, Plane, Save } from "lucide-react";
+import { CloudSun, Globe, ImageIcon, Save } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ErrorState, PageHeader } from "@/components/shared";
@@ -21,6 +21,11 @@ import { errMsg } from "@/lib/utils";
 import type { ServiceConfigsDto } from "@/lib/types";
 
 // 字段定义与后端 service_configs payload 键对应;留空 = 回落 .env(迁移期兜底)。
+//
+// 密钥读出面契约(A12):后端一律回 `********` 掩码,绝不回明文/密文。
+// **"不修改密钥"的表达方式就是把掩码原样回传** —— 草稿初值即掩码,用户不动
+// 它,PATCH 带回去后端识别为"保持不变"。因此这里不做"空串=清空"的特殊处理,
+// 也不要在提交前把掩码替换成空串。
 // showWhen:按其它字段的当前值联动显隐(如仅在选中对应服务商时显示其密钥行)
 interface FieldDef {
   key: string;
@@ -144,7 +149,7 @@ const SERVICES: ServiceDef[] = [
   {
     name: "weather",
     title: "天气数据",
-    description: "行程天气查询；open-meteo 免密钥恒作兜底",
+    description: "weather_get 工具的数据源；open-meteo 免密钥恒作兜底",
     icon: CloudSun,
     fields: [
       {
@@ -164,48 +169,6 @@ const SERVICES: ServiceDef[] = [
         label: "和风专属 API Host",
         hint: "每账号独立，形如 xxx.qweatherapi.com",
         placeholder: "xxx.qweatherapi.com",
-      },
-    ],
-  },
-  {
-    name: "ota",
-    title: "OTA 比价",
-    description: "报价环节的酒店与机票参考价",
-    icon: Plane,
-    fields: [
-      {
-        key: "provider",
-        label: "数据源",
-        hint: "自动模式：配了 RapidAPI 密钥用真实源，否则用 mock",
-        options: [
-          { value: "auto", label: "自动" },
-          { value: "booking_rapidapi", label: "Booking（RapidAPI）" },
-          { value: "mock", label: "mock（开发用）" },
-        ],
-      },
-      {
-        key: "rapidapi_key",
-        label: "RapidAPI 密钥",
-        secret: true,
-        showWhen: (values) =>
-          !values.provider ||
-          values.provider === "auto" ||
-          values.provider === "booking_rapidapi",
-      },
-      {
-        key: "booking_host",
-        label: "RapidAPI Host",
-        placeholder: "booking-com15.p.rapidapi.com",
-        showWhen: (values) =>
-          !values.provider ||
-          values.provider === "auto" ||
-          values.provider === "booking_rapidapi",
-      },
-      {
-        key: "timeout_seconds",
-        label: "请求超时",
-        placeholder: "25",
-        suffix: "秒",
       },
     ],
   },
@@ -377,7 +340,7 @@ export default function AdminServicesPage() {
     <div className="mx-auto max-w-3xl space-y-5">
       <PageHeader
         title="外部服务"
-        description="联网搜索、图片生成、天气与 OTA 比价的凭证；模型类配置统一在模型提供商与模型路由"
+        description="联网搜索、图片生成与天气的凭证；模型类配置统一在模型提供商与模型路由"
       />
       {configs.error ? (
         <ErrorState error={configs.error} onRetry={() => configs.refetch()} />

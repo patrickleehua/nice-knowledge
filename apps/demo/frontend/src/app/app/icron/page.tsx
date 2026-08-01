@@ -266,7 +266,7 @@ function TaskForm({
         label="任务指令"
         htmlFor="icron-instruction"
         required
-        description="到点无人值守执行,没有人能回答追问:请写清目标、已知事实(旅行计划/报价 ID、目的地、日期)、约束与期望产出"
+        description="到点无人值守执行,没有人能回答追问:请写清目标、已知事实(对象 ID、日期、口径)、约束与期望产出"
       >
         <Textarea
           id="icron-instruction"

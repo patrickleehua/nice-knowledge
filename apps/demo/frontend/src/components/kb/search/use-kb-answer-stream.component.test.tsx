@@ -28,10 +28,10 @@ let emit: (frame: unknown) => void = () => {
 
 function hit(name: string): SearchHit {
   return {
-    kind: "hotel",
+    kind: "product",
     layer: "tenant",
     kb_id: "kb-1",
-    source: `hotel/${name}`,
+    source: `product/${name}`,
     confidence: 0.9,
     data: {
       id: `id-${name}`,
@@ -59,7 +59,7 @@ function hit(name: string): SearchHit {
 function sourcesFrame(refs: number[]): unknown {
   const sources: KnowledgeAnswerSource[] = refs.map((ref) => ({
     ref,
-    hit: hit(`酒店${ref}号`),
+    hit: hit(`条款${ref}号`),
   }));
   return { type: "sources", sources };
 }

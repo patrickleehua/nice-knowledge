@@ -45,9 +45,9 @@ import { cn } from "@/lib/utils";
 const popupClass =
   "w-[min(22rem,calc(100vw-1.5rem))] origin-(--transform-origin) rounded-2xl bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgb(0_0_0/0.16)] ring-1 ring-foreground/10 outline-hidden transition-[transform,opacity] duration-100 data-ending-style:scale-[0.98] data-ending-style:opacity-0 data-starting-style:scale-[0.98] data-starting-style:opacity-0 motion-reduce:transition-none";
 
-function scopeLabel(scope: PermissionScope, hasProject: boolean) {
+function scopeLabel(scope: PermissionScope, hasScope: boolean) {
   if (scope === "organization") return "当前组织";
-  if (scope === "project") return hasProject ? "当前旅行计划" : "旅行计划范围";
+  if (scope === "resource") return hasScope ? "当前作用域" : "作用域范围";
   return "当前会话";
 }
 
@@ -254,7 +254,7 @@ export function PermissionControl({
     if (!state || unavailable) return;
     setMobileOpen(false);
     if (next === "full_access") {
-      setFullScope(state.project_id ? "project" : "session");
+      setFullScope(state.scope_id ? "resource" : "session");
       setFullExpiry(
         Math.min(30 * 60, state.organization.max_full_access_ttl_seconds),
       );
@@ -275,7 +275,7 @@ export function PermissionControl({
       await onUpdate({
         ...permissionUpdateBase(state),
         profile: next,
-        scope: state.project_id ? state.scope : "session",
+        scope: state.scope_id ? state.scope : "session",
       });
     } catch {
       // Mutation owner renders the authoritative error; keep the current mode.
@@ -304,7 +304,7 @@ export function PermissionControl({
       await onUpdate({
         ...permissionUpdateBase(state),
         profile: "request_approval",
-        scope: state.project_id ? state.scope : "session",
+        scope: state.scope_id ? state.scope : "session",
       });
       setFullOpen(false);
     } catch {
@@ -319,7 +319,7 @@ export function PermissionControl({
       await onUpdate({
         ...permissionUpdateBase(state),
         profile: "custom",
-        scope: state.project_id ? state.scope : "session",
+        scope: state.scope_id ? state.scope : "session",
         custom_rules: completeRules,
       });
       setCustomOpen(false);
@@ -384,7 +384,7 @@ export function PermissionControl({
                     <Shield className="size-3.5" />
                     Agent 权限
                     <span className="ml-auto font-normal">
-                      {scopeLabel(state.scope, !!state.project_id)}
+                      {scopeLabel(state.scope, !!state.scope_id)}
                     </span>
                   </Menu.GroupLabel>
                   <PermissionLockNotice
@@ -494,7 +494,7 @@ export function PermissionControl({
                   Agent 权限
                 </Dialog.Title>
                 <Dialog.Description className="mt-0.5 text-xs text-muted-foreground">
-                  {scopeLabel(state.scope, !!state.project_id)}
+                  {scopeLabel(state.scope, !!state.scope_id)}
                 </Dialog.Description>
               </div>
               <Dialog.Close
@@ -533,7 +533,7 @@ export function PermissionControl({
                 <p className="text-sm font-medium">减少确认，不扩大权限边界</p>
                 <p className="mt-1 text-xs leading-5 text-orange-900/75 dark:text-orange-100/70">
                   Agent
-                  白名单、组织与角色权限、旅行计划隔离、预算和必须由人工完成的业务审核仍然生效。
+                  白名单、组织与角色权限、作用域隔离、预算和必须由人工完成的审核仍然生效。
                 </p>
               </div>
             </div>
@@ -550,9 +550,9 @@ export function PermissionControl({
                 className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <option value="session">当前会话</option>
-                {state.project_id &&
+                {state.scope_id &&
                   state.organization.max_scope !== "session" && (
-                    <option value="project">当前旅行计划</option>
+                    <option value="resource">当前作用域</option>
                   )}
               </select>
             </label>
@@ -573,9 +573,9 @@ export function PermissionControl({
             </label>
           </div>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
-            {state.project_id
-              ? "旅行计划范围只覆盖当前绑定旅行计划；跨旅行计划操作仍会询问或拒绝。"
-              : "通用会话可创建新旅行计划，但修改既有旅行计划仍需匹配旅行计划授权。"}
+            {state.scope_id
+              ? "作用域范围只覆盖当前绑定的业务作用域；跨作用域操作仍会询问或拒绝。"
+              : "通用会话可创建新的作用域根，但修改既有作用域仍需匹配作用域授权。"}
           </p>
         </div>
         <div className="flex flex-col-reverse gap-2 border-t border-border/55 bg-muted/25 px-5 py-4 sm:flex-row sm:justify-end">
