@@ -1,7 +1,7 @@
 r"""联网搜索的域名策略与来源分级(官方 > 权威媒体 > UGC)。
 
-为什么需要:web_search 把公开网页原样喂给模型,搜「某国签证政策」时社交平台
-笔记与该国大使馆官网同权,输出会被 UGC 口径带偏,存在合规风险。本模块负责
+为什么需要:web_search 把公开网页原样喂给模型,搜某项政策法规时社区帖子与
+主管部门官网同权,输出会被 UGC 口径带偏,存在合规风险。本模块负责
 三件事:黑名单剔除、来源三级分级、按分级重排 —— 让官方口径天然排在前面。
 
 降级约定(与 provider 一致):URL 与管理端配置都是外部输入,任何非法值只做
@@ -262,8 +262,8 @@ class MatchPatternMap:
 # 预置分级清单(默认样例:政务/出行/资讯域;宿主可经管理端来源策略整体覆盖)
 # --------------------------------------------------------------------------
 
-# 官方:政府/使馆/外交与移民机构/民航局与航司官网。签证、入境、通关、航班规则
-# 的唯一权威口径,政策类问题必须压过一切二手转述。
+# 官方:政府 / 外交与移民机构。政策法规的唯一权威口径,必须压过一切二手转述。
+# 行业专有的官方源(监管机构、厂商官网……)由宿主经 load_policy(overrides) 追加。
 _OFFICIAL_RULES: tuple[str, ...] = (
     # 各国与地区政府域名后缀
     "*://*.gov.cn/*",
@@ -280,21 +280,10 @@ _OFFICIAL_RULES: tuple[str, ...] = (
     "*://*.gov.my/*",
     "*://*.go.th/*",
     "*://*.gov.ae/*",
-    # 使馆 / 外交 / 移民局:签证材料与入境要求的第一手来源
+    # 外交与移民机构:跨境事务的第一手来源
     "*://*.mfa.gov.cn/*",
     "*://*.embassy.gov*/*",
     "*://*.immigration.gov*/*",
-    # 民航监管与航司官网:行李、值机、退改签规则以承运人官网为准
-    "*://*.caac.gov.cn/*",
-    "*://*.airchina.com/*",
-    "*://*.csair.com/*",
-    "*://*.ceair.com/*",
-    "*://*.hnair.com/*",
-    "*://*.juneyaoair.com/*",
-    "*://*.cathaypacific.com/*",
-    "*://*.singaporeair.com/*",
-    "*://*.ana.co.jp/*",
-    "*://*.jal.co.jp/*",
 )
 
 # 权威媒体:有编辑部与事实核查流程,可作官方口径的补充与解读,但不作最终依据。
@@ -313,19 +302,14 @@ _MEDIA_RULES: tuple[str, ...] = (
     "*://*.nikkei.com/*",
 )
 
-# UGC:社区/点评/短视频。做"好玩好吃"类体验参考很有价值,但政策时效性差、
-# 个人经验易以偏概全,默认降权,政策类问题再额外压制。
+# UGC:社区/问答/短视频。做主观体验参考有价值,但时效性差、个人经验易以偏概全,
+# 默认降权,政策类问题再额外压制。行业垂直社区由宿主按需追加。
 _UGC_RULES: tuple[str, ...] = (
     "*://*.xiaohongshu.com/*",
     "*://*.zhihu.com/*",
     "*://*.weibo.com/*",
     "*://*.douban.com/*",
     "*://tieba.baidu.com/*",
-    "*://*.mafengwo.cn/*",
-    "*://*.qyer.com/*",
-    "*://*.dianping.com/*",
-    "*://*.tripadvisor.com/*",
-    "*://*.tripadvisor.cn/*",
     "*://*.douyin.com/*",
     "*://*.bilibili.com/*",
 )
@@ -345,6 +329,49 @@ _DEFAULT_BOOST: Mapping[str, float] = MappingProxyType(
         "ugc": 0.7,  # UGC 默认降权
     }
 )
+
+
+# --------------------------------------------------------------------------
+# 政策类问题识别
+# --------------------------------------------------------------------------
+
+# 中文关键词直接子串匹配(中文无词边界)
+_POLICY_KEYWORDS_CN: tuple[str, ...] = (
+    "政策",
+    "新规",
+    "规定",
+    "法规",
+    "条例",
+    "办法",
+    "通知",
+    "公告",
+    "合规",
+    "监管",
+    "标准",
+    "资质",
+)
+
+# 英文关键词走词边界:子串匹配会把 "policyholder" 误判成 policy
+_POLICY_KEYWORDS_EN: tuple[str, ...] = (
+    "policy",
+    "policies",
+    "regulation",
+    "regulations",
+    "compliance",
+    "statute",
+    "legislation",
+)
+def _compile_policy_keywords_en(words: tuple[str, ...]) -> re.Pattern[str] | None:
+    """英文触发词编译为带词边界的正则;空词表返回 None(只走中文子串匹配)。"""
+    cleaned = [word.strip() for word in words if word and word.strip()]
+    if not cleaned:
+        return None
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(word) for word in cleaned) + r")\b", re.IGNORECASE
+    )
+
+
+_POLICY_EN_RE = _compile_policy_keywords_en(_POLICY_KEYWORDS_EN)
 
 
 # --------------------------------------------------------------------------
@@ -385,11 +412,19 @@ class DomainPolicy:
     boost: Mapping[str, float] = field(default_factory=lambda: _DEFAULT_BOOST)
     policy_boost_official: float = 1.5  # 政策类问题对 official 的额外加权
     policy_penalty_ugc: float = 0.5  # 政策类问题对 ugc 的额外降权
+    # 政策类问题的触发词。内置词表只覆盖通用政务/合规语义,行业专有词由宿主追加;
+    # 关键词属于策略的一部分而非模块全局,不同租户可以有不同的领域词表。
+    policy_keywords_cn: tuple[str, ...] = field(default_factory=lambda: _POLICY_KEYWORDS_CN)
+    policy_keywords_en: tuple[str, ...] = field(default_factory=lambda: _POLICY_KEYWORDS_EN)
     # 编译产物随策略一起固化(frozen 下用 object.__setattr__ 写入),不参与比较与 repr
     compiled: _CompiledPolicy = field(init=False, repr=False, compare=False)
+    compiled_policy_en: re.Pattern[str] | None = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "compiled", _compile_policy(self.deny, self.tiers))
+        object.__setattr__(
+            self, "compiled_policy_en", _compile_policy_keywords_en(self.policy_keywords_en)
+        )
 
 
 DEFAULT_POLICY = DomainPolicy(deny=_DEFAULT_DENY)
@@ -443,6 +478,21 @@ def load_policy(overrides: dict | None = None) -> DomainPolicy:
         # 去重并保持"自定义在前"的次序
         tiers[tier] = tuple(dict.fromkeys(custom.get(tier, ()) + preset))
 
+    # 政策触发词:默认在内置词表上追加;policy_keywords_mode=replace 则整体替换
+    raw_keywords = data.get("policy_keywords")
+    extra_cn: tuple[str, ...] = ()
+    extra_en: tuple[str, ...] = ()
+    if isinstance(raw_keywords, dict):
+        extra_cn = _as_rules(raw_keywords.get("cn")) or ()
+        extra_en = _as_rules(raw_keywords.get("en")) or ()
+    keywords_replace = str(data.get("policy_keywords_mode") or "").strip().lower() == "replace"
+    keywords_cn = tuple(
+        dict.fromkeys(extra_cn if keywords_replace else extra_cn + _POLICY_KEYWORDS_CN)
+    )
+    keywords_en = tuple(
+        dict.fromkeys(extra_en if keywords_replace else extra_en + _POLICY_KEYWORDS_EN)
+    )
+
     boost = dict(_DEFAULT_BOOST)
     raw_boost = data.get("boost")
     if isinstance(raw_boost, dict):
@@ -460,57 +510,26 @@ def load_policy(overrides: dict | None = None) -> DomainPolicy:
         policy_penalty_ugc=_as_weight(
             data.get("policy_penalty_ugc"), DEFAULT_POLICY.policy_penalty_ugc
         ),
+        policy_keywords_cn=keywords_cn,
+        policy_keywords_en=keywords_en,
     )
 
 
-# --------------------------------------------------------------------------
-# 政策类问题识别
-# --------------------------------------------------------------------------
+def is_policy_query(query: str, policy: DomainPolicy | None = None) -> bool:
+    """是否政策法规类问题——这类问题要额外抬官方压 UGC。
 
-# 中文关键词直接子串匹配(中文无词边界)
-_POLICY_KEYWORDS_CN: tuple[str, ...] = (
-    "签证",
-    "入境",
-    "出境",
-    "免签",
-    "落地签",
-    "电子签",
-    "通关",
-    "口岸",
-    "海关",
-    "检疫",
-    "防疫",
-    "政策",
-    "新规",
-    "规定",
-    "法规",
-    "护照",
-)
-
-# 英文关键词走词边界:子串匹配会把 "advisable" 误判成 visa
-_POLICY_KEYWORDS_EN: tuple[str, ...] = (
-    "visa",
-    "visas",
-    "passport",
-    "entry requirement",
-    "entry requirements",
-    "customs",
-    "immigration",
-)
-_POLICY_EN_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(word) for word in _POLICY_KEYWORDS_EN) + r")\b",
-    re.IGNORECASE,
-)
-
-
-def is_policy_query(query: str) -> bool:
-    """是否政策/证件类问题(签证、入境、通关……)——这类问题要额外抬官方压 UGC。"""
+    内置词表只覆盖通用政务/合规语义;行业专有触发词(某领域的证件名、准入名词
+    等)由宿主经 ``load_policy({"policy_keywords": {"cn": [...], "en": [...]}})``
+    追加,或 ``policy_keywords_mode="replace"`` 整体替换。
+    """
     text = (query or "").strip()
     if not text:
         return False
-    if any(keyword in text for keyword in _POLICY_KEYWORDS_CN):
+    keywords_cn = policy.policy_keywords_cn if policy is not None else _POLICY_KEYWORDS_CN
+    if any(keyword in text for keyword in keywords_cn):
         return True
-    return _POLICY_EN_RE.search(text) is not None
+    pattern = policy.compiled_policy_en if policy is not None else _POLICY_EN_RE
+    return pattern is not None and pattern.search(text) is not None
 
 
 # --------------------------------------------------------------------------
@@ -540,7 +559,7 @@ def apply_policy(
     基础分只取原始位次倒数 1/(1+i),不用 provider 的 score:Tavily 是 0-1 的
     相关度、Bocha 根本没有,跨 provider 混排时用它会把两家的量纲搅在一起。
     """
-    policy_mode = is_policy_query(query)
+    policy_mode = is_policy_query(query, policy)
     scored: list[tuple[float, SearchHit]] = []
     index = 0
     for hit in hits:

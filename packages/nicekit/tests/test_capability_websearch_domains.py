@@ -171,17 +171,34 @@ def test_is_denied_default_policy_blocks_nothing() -> None:
 
 
 def test_is_policy_query_positive_cn_and_en() -> None:
-    assert is_policy_query("泰国签证政策最新变化") is True
-    assert is_policy_query("日本入境需要什么材料") is True
-    assert is_policy_query("Thailand VISA on arrival 2026") is True
-    assert is_policy_query("entry requirements for Japan") is True
+    # 内置词表只覆盖通用政务/合规语义,不含任何行业专有词
+    assert is_policy_query("数据出境的最新监管规定") is True
+    assert is_policy_query("这个行业有什么资质要求") is True
+    assert is_policy_query("GDPR compliance checklist") is True
+    assert is_policy_query("new data protection regulation") is True
 
 
 def test_is_policy_query_negative() -> None:
-    assert is_policy_query("东京好吃的拉面") is False
+    assert is_policy_query("附近好吃的拉面") is False
     assert is_policy_query("") is False
-    # 词边界:advisable 里含 visa 子串,不能误判成政策问题
-    assert is_policy_query("advisable hotels in tokyo") is False
+    # 词边界:policyholder 里含 policy 子串,不能误判成政策问题
+    assert is_policy_query("policyholder contact information") is False
+
+
+def test_policy_keywords_are_host_configurable() -> None:
+    """行业专有触发词由宿主经 load_policy 追加,SDK 不内置任何领域词表。"""
+    assert is_policy_query("签证怎么办") is False  # 内置词表命中不了
+
+    appended = load_policy({"policy_keywords": {"cn": ["签证"], "en": ["visa"]}})
+    assert is_policy_query("签证怎么办", appended) is True
+    assert is_policy_query("visa requirements", appended) is True
+    assert is_policy_query("最新监管规定", appended) is True  # 追加模式保留内置词
+
+    replaced = load_policy(
+        {"policy_keywords": {"cn": ["配方"]}, "policy_keywords_mode": "replace"}
+    )
+    assert is_policy_query("配方标准变更", replaced) is True
+    assert is_policy_query("最新监管规定", replaced) is False  # 替换模式丢弃内置词
 
 
 # --------------------------------------------------------------------------
