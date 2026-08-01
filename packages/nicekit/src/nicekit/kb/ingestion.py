@@ -45,6 +45,18 @@ from nicekit.kb.embedding import (
     EmbeddingUnavailableError,
     chunk_embedding_text,
 )
+from nicekit.kb.entity_binding import (
+    ENTITY_PREDICATE,
+    RELATION_PREDICATES,
+    allowed_entity_types,
+)
+from nicekit.kb.entity_resolution import EntityConflictError, normalize_alias
+from nicekit.kb.entity_types import (
+    EntityValidationError,
+    get_entity_type,
+    validate_entity_attributes,
+)
+from nicekit.kb.evidence_locator import EvidenceNotFoundError, locate_evidence
 from nicekit.kb.guardrails import (
     fence_untrusted_document,
     suspicious_instruction_reasons,
@@ -93,16 +105,10 @@ from nicekit.models.kb import (
 if TYPE_CHECKING:  # pragma: no cover - 仅供类型标注
     from nicekit.kb.image_enrichment import KbImageEnrichmentService
 
-# ---- P3b 延迟 import 说明 --------------------------------------------------
-# 下列 KB 模块在本波(P3a:模型层 + 摄入链)尚未搬运,按约定路径在**使用处**
-# 延迟 import,以便 ingestion 本身可被导入与单测(实体抽取/图片富化/wiki 生成
-# 三条支线在 P3b 落地后自动接通,届时可按需把 import 提回模块级):
+# ---- 延迟 import 说明 ------------------------------------------------------
+# 实体/证据支线已在 P3b 搬入,import 提回模块级。下列模块属媒体与 wiki 波次,
+# 仍在**使用处**延迟 import,以便 ingestion 本身可被导入与单测:
 #   nicekit.kb.caption            CaptionModelSelection
-#   nicekit.kb.entity_binding     ENTITY_PREDICATE / RELATION_PREDICATES / allowed_entity_types
-#   nicekit.kb.entity_resolution  EntityConflictError / normalize_alias
-#   nicekit.kb.entity_types       EntityValidationError / get_entity_type /
-#                                 validate_entity_attributes
-#   nicekit.kb.evidence_locator   EvidenceNotFoundError / locate_evidence
 #   nicekit.kb.image_enrichment   KbImageEnrichmentService / get_kb_image_enrichment_service
 #   nicekit.kb.image_ingestion    persist_image_candidates / process_revision_image_enrichment /
 #                                 revision_image_stage / summarize_image_assets
@@ -254,9 +260,6 @@ async def _enqueue_fact_claim(
     evidence_quote = payload.get("evidence_quote")
     if not isinstance(evidence_quote, str):
         raise ValueError("extracted fact has no evidence_quote")
-    # P3b 延迟 import(见文件头说明)
-    from nicekit.kb.evidence_locator import locate_evidence
-
     location = locate_evidence(
         evidence_quote,
         segment_markdown,
@@ -773,9 +776,6 @@ async def _resolve_extraction_spec(
     注入用户消息并在落库前用 jsonschema 强校验。未注册的类型直接报错,
     不再有"内置兜底",行业模型一律通过注册实体类型表达。
     """
-    # P3b 延迟 import(见文件头说明)
-    from nicekit.kb.entity_types import get_entity_type
-
     doc_type_key = target_doc_type or str(doc.doc_type)
     entity_type = await get_entity_type(session, doc.org_id, doc_type_key)
     if entity_type is None:
@@ -988,7 +988,7 @@ async def ingest_document(
     embedder: EmbeddingService | None = None,
     image_enricher: "KbImageEnrichmentService | None" = None,
 ) -> None:
-    # P3b defer-import (see module header note)
+    # 媒体波次延迟 import(见文件头说明)
     from nicekit.kb.caption import CaptionModelSelection
     from nicekit.kb.image_enrichment import get_kb_image_enrichment_service
     from nicekit.kb.image_ingestion import (
@@ -1902,7 +1902,7 @@ async def _maybe_update_wiki(
     auto_wiki = profile.auto_wiki if profile is not None else IngestProfile().auto_wiki
     if not auto_wiki:
         return
-    # P3b 延迟 import(见文件头说明)
+    # wiki 波次延迟 import(见文件头说明)
     from nicekit.kb.wiki_gen import WikiSnapshotManagedError, update_wiki_for_document
 
     try:
@@ -1936,9 +1936,6 @@ async def _enqueue_graph_claim(
     与结构化抽取不同:那里定位失败要让整段失败(结构化事实必须可追溯),
     而图谱是增强项,单条引文对不上原文时丢弃它比让整篇文档摄入失败更合适。
     """
-    # P3b 延迟 import(见文件头说明)
-    from nicekit.kb.evidence_locator import EvidenceNotFoundError
-
     try:
         await _enqueue_fact_claim(
             session,
@@ -1964,9 +1961,6 @@ async def _enqueue_graph_claim(
 
 def _entity_key(name: str) -> str | None:
     """实体名的段内去重键(与 entity_binding 归一同一套规范化)。"""
-    # P3b defer-import (see module header note)
-    from nicekit.kb.entity_resolution import EntityConflictError, normalize_alias
-
     try:
         return normalize_alias(name)
     except EntityConflictError:
@@ -1975,9 +1969,6 @@ def _entity_key(name: str) -> str | None:
 
 def _entity_spec_block(allowed: dict[str, str]) -> str:
     """实体抽取的用户消息前缀:类型白名单 + 关系谓词说明(与落库校验同源)。"""
-    # P3b defer-import (see module header note)
-    from nicekit.kb.entity_binding import RELATION_PREDICATES
-
     types = "\n".join(f"- {key}:{desc}" for key, desc in sorted(allowed.items()))
     predicates = "、".join(sorted(RELATION_PREDICATES))
     return (
@@ -2010,9 +2001,6 @@ async def _ingest_entity_graph(
     判定通过时归一绑定到 canonical entity(entity_binding),快照 graph 投影
     据此连直接边与共现边,同名实体跨文档归一到同一节点即完成串联。
     """
-    # P3b defer-import (see module header note)
-    from nicekit.kb.entity_binding import allowed_entity_types
-
     allowed = await allowed_entity_types(session, doc.org_id)
     spec_prefix = _entity_spec_block(allowed)
     segments = split_for_extraction(
@@ -2084,9 +2072,6 @@ async def _graph_one_segment(
     captured_epoch: int,
 ) -> int:
     """Claim, extract and stage graph facts for exactly one segment."""
-    # P3b defer-import (see module header note)
-    from nicekit.kb.entity_binding import ENTITY_PREDICATE, RELATION_PREDICATES
-
     claim = await _claim_stage(
         session,
         revision,
@@ -2385,9 +2370,6 @@ async def _extract_one_segment(
     captured_epoch: int,
 ) -> None:
     """Claim, extract and stage exactly one segment on its own session."""
-    # P3b defer-import (see module header note)
-    from nicekit.kb.entity_types import EntityValidationError, validate_entity_attributes
-
     claim = await _claim_stage(
         session,
         revision,

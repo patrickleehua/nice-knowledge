@@ -8,16 +8,16 @@
    没注册成实体类型就直接报错,不会退回到"内置契约";
 4. 5 张旅游专表不在 SDK 的模型层里。
 
-entity_types 模块属 P3b,这里用 `_kb_p3b_stubs` 的替身注入
-(见 nicekit/kb/ingestion.py 文件头的延迟 import 清单)。
+entity_types 的注册表查询用 monkeypatch 替身,避免起库。
 """
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from _kb_p3b_stubs import install_entity_types_stub
 
+import nicekit.kb.ingestion as ingestion
 import nicekit.models.kb as models_kb
 from nicekit.domain.kb import GenericEntityExtraction
 from nicekit.kb.ingestion import (
@@ -26,6 +26,15 @@ from nicekit.kb.ingestion import (
     _resolve_extraction_spec,
 )
 from nicekit.models.kb import DocType, KbEntityType
+
+
+def install_entity_types_stub(
+    monkeypatch: pytest.MonkeyPatch, *, entity_type: KbEntityType | None
+) -> AsyncMock:
+    """替换 ingestion 模块级绑定的 get_entity_type(注册表查询,不起库)。"""
+    stub = AsyncMock(return_value=entity_type)
+    monkeypatch.setattr(ingestion, "get_entity_type", stub)
+    return stub
 
 _FIELD_SCHEMA = {
     "type": "object",
@@ -104,8 +113,8 @@ async def test_registered_type_resolves_to_generic_contract(
     assert contract is GenericEntityExtraction
     assert predicate == "component"
     assert resolved is entity_type
-    stub.get_entity_type.assert_awaited_once()
-    assert stub.get_entity_type.await_args.args[1:] == (doc.org_id, "component")
+    stub.assert_awaited_once()
+    assert stub.await_args.args[1:] == (doc.org_id, "component")
 
 
 @pytest.mark.parametrize("legacy", ["hotel", "cost", "poi", "route_template"])
@@ -150,7 +159,7 @@ async def test_target_doc_type_overrides_document_value(
     )
 
     assert predicate == "supplier"
-    assert stub.get_entity_type.await_args.args[2] == "supplier"
+    assert stub.await_args.args[2] == "supplier"
 
 
 async def test_general_doc_type_still_requires_registration(

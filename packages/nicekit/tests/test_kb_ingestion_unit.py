@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from _kb_p3b_stubs import install_evidence_locator_stub
 
+import nicekit.kb.ingestion as ingestion
 from nicekit.kb import storage
 from nicekit.kb.ingestion import (
     LLM_THROTTLE_ERROR,
@@ -137,9 +137,10 @@ async def test_staged_fast_parse_does_not_require_structured_artifact(monkeypatc
 async def test_fact_claim_keeps_raw_payload_and_pairs_evidence_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_evidence_locator_stub(
-        monkeypatch,
-        locate=lambda *_args, **_kwargs: SimpleNamespace(
+    monkeypatch.setattr(
+        ingestion,
+        "locate_evidence",
+        lambda *_args, **_kwargs: SimpleNamespace(
             page=None, start_line=9, end_line=9, cell_ref=None, quote_text="A-100 | 1200"
         ),
     )

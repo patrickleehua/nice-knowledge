@@ -1,8 +1,8 @@
 """KB 防注入围栏单测(P3a 搬运适配版)。
 
 适配点:DocType 收敛为 unclassified/general 后,结构化抽取用例的 doc_type
-改为一个已注册实体类型 key;`_resolve_extraction_spec` 依赖的 entity_types
-模块属 P3b,用 `_kb_p3b_stubs` 的替身注入(见 ingestion.py 文件头延迟 import 清单)。
+改为一个已注册实体类型 key;`_resolve_extraction_spec` 的注册表查询用
+monkeypatch 替身(不起库)。
 """
 
 from contextlib import asynccontextmanager
@@ -10,8 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-from _kb_p3b_stubs import install_entity_types_stub
-
+import nicekit.kb.ingestion as ingestion
 from nicekit.kb.guardrails import (
     UNTRUSTED_END,
     UNTRUSTED_START,
@@ -59,7 +58,7 @@ async def test_structured_extraction_receives_only_fenced_source_content(
             "additionalProperties": False,
         },
     )
-    install_entity_types_stub(monkeypatch, entity_type=entity_type)
+    monkeypatch.setattr(ingestion, "get_entity_type", AsyncMock(return_value=entity_type))
     doc = SourceDocument(
         id=uuid4(),
         org_id=uuid4(),

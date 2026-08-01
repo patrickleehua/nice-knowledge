@@ -231,6 +231,23 @@ SDK 内部禁止 import 任何宿主/业务代码。业务定制一律走以下�
 
 保留的核心契约层(不动):`lib/api.ts`(fetch+单飞 refresh+postSse)、`lib/agent-events.ts`(事件投影+测试)、`lib/{agent-permissions,org-agent-permissions,approval-decisions,chat-session-state}.ts` 及全部 `.test.mjs`。
 
+## 5.9 跨波次接线约定(执行中沉淀,后续波次必读)
+
+前序波次留下的、必须由后续波次接上的口子。每完成一项就在此打勾。
+
+| # | 约定 | 责任波次 |
+|---|---|---|
+| A1 | `nicekit/models/operations.py` 与 `services/operations/`(ServiceHeartbeat / ProviderProbeStatus / KbOperationalIncident + diagnostics/probes/runtime/schedules/worker_heartbeat)尚未迁移。这批属**通用运维可观测性**(非业务),定位在 SDK 内。P3b 已用 `kb/ports.py::IncidentRecorder` 兜住 snapshot/health_sweep/document_purge 三处调用;`core/metrics.py::SERVICE_HEARTBEAT_AGE` 当前无人刷新。P4 补齐模型 + 默认 SQL 实现的 IncidentRecorder,并把新表加进 baseline。 | P4 |
+| A2 | `builtin_tools.py` 不做 import 期自注册(避免把 KB/capabilities 拖进导入链)。装配期必须显式 `import nicekit.agent.builtin_tools`。 | P4 |
+| A3 | 装配期必须调用:`kb.entity_types.ensure_entity_types(session)`(至少 seed `concept`,否则实体绑定白名单为空)、`kb.answer_seed.ensure_kb_answer_route(session)`、`llm.prompt_catalog.register_prompt_catalog_entries(...)`(KB 的 task 目录条目)、`kb.prompts_seed` 的 seed。 | P4 |
+| A4 | MCP 工具注册(TF `service.py:708-730`)由 P2c 的 `service.py` 完成,权限调 `mcp_manager.mcp_tool_permission(server, spec)`(已实现,优先读协议原生 `annotations.read_only_hint`)。 | P2c |
+| A5 | `sub_agents.build_delegation_tool()/run_sub_agent()` 已删 `project_id` 参数,scope 从 `ToolContext.chat_session` 自取;`icron.create_task/update_task` 用 `scope_type`+`scope_id`,角色参数是 `str` 非 Role 枚举。service 接线按此。 | P2c |
+| A6 | `projections.py` 文件头临时定义了 `PAGE_ORIGIN_LLM`/`PAGE_DRAFT_PENDING`/`WIKI_PUBLICATION_STATUS_KEY`;`wiki_gen.py`/`wiki_review.py` 搬入后改为从那里 import(值须一致)。 | P3c |
+| A7 | `snapshot.py::_snapshot_media()` 是可选加载器,`snapshot_media.py` 搬入后自动注册为必需 builder(`required_manifest()` 届时从 graph/retrieval/sql/wiki 变为含 media);`review_settlement.py` 对 `image_ingestion` 同理。新仓库无存量快照,无需兼容处理。 | P3c |
+| A8 | **lifecycle 契约已变更**:预检 payload 删 `project_ids`/`project_references`/`retrieval_snapshot_ids`/`route_asset_ids`,新增 `external_reference_count`/`counts.external_references`;`archive_knowledge_base` 参数 `acknowledge_project_unlink` → `acknowledge_external_unlink`;blocker 码 `current_project_references` → `external_scope_references`(公开码 `EXTERNAL_SCOPE_REFERENCE`),`historical_retrieval_references` 删除。API 与前端按新契约实现。 | P3c/P4/P5 |
+| A9 | 待补测试(源文件内已留标记):websearch 工具门控、runtime_tools 工具快照、icron/session_goal API 层、sub_agents 专员 seed、compression 的 `rows_to_history`;approval reviewer 的评测集需自备中性语料。 | P2c/P4 |
+| A10 | 测试写法纪律:替换可选依赖模块一律 `monkeypatch.setattr(包对象, "模块名", 替身)`,**不要** `monkeypatch.setitem(sys.modules, ...)`——`from pkg import mod` 优先取包属性,真实模块被别的用例 import 过后 sys.modules 替身会被绕开(已踩坑一次)。 | 全部 |
+
 ## 6. 阶段计划与验收
 
 | 阶段 | 内容 | 验收 |
