@@ -150,13 +150,26 @@ const CONNECTIVITY_ERROR_LABEL: Record<string, string> = {
   stream_incomplete: "流式响应不完整",
 };
 
+// 后端在诊断码后追加的可选提示(hint=...)→ 人话。目前只有一条:base_url
+// 少写版本段导致 /models 404,这是配置面最高频的一次性错误。
+const CONNECTIVITY_HINT_LABEL: Record<string, string> = {
+  base_url_missing_version_path:
+    "Base URL 可能缺少版本路径,试试补上 /v1(如 https://api.example.com/v1)",
+};
+
 function connectivityErrorLabel(code: string): string {
   const [head, ...rest] = code.split(";");
   const label = CONNECTIVITY_ERROR_LABEL[head] ?? head;
   const status = rest
     .find((part) => part.startsWith("status="))
     ?.slice("status=".length);
-  return status ? `${label}（HTTP ${status}）` : label;
+  const hint = rest
+    .find((part) => part.startsWith("hint="))
+    ?.slice("hint=".length);
+  const base = status ? `${label}（HTTP ${status}）` : label;
+  return hint && CONNECTIVITY_HINT_LABEL[hint]
+    ? `${base} · ${CONNECTIVITY_HINT_LABEL[hint]}`
+    : base;
 }
 
 function ConnectivityBadge({ result }: { result: ProviderConnectivityDto }) {

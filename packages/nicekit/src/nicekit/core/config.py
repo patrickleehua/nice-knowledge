@@ -13,11 +13,23 @@
 """
 
 from functools import lru_cache
-from typing import Self
+from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, BeforeValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _parse_debug(value: object) -> object:
+    """Accept common deployment words from ambient DEBUG env vars."""
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().casefold()
+    if normalized in {"release", "production", "prod", "false", "0", "off", "no"}:
+        return False
+    if normalized in {"debug", "development", "dev", "true", "1", "on", "yes"}:
+        return True
+    return value
 
 
 class _DomainSettings(BaseSettings):
@@ -29,7 +41,7 @@ class _DomainSettings(BaseSettings):
 class CoreSettings(_DomainSettings):
     app_name: str = "NiceKit"
     deployment_environment: str = "development"
-    debug: bool = False
+    debug: Annotated[bool, BeforeValidator(_parse_debug)] = False
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     database_url: str = (

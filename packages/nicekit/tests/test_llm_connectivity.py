@@ -143,6 +143,8 @@ async def test_model_check_probes_generation_through_the_responses_endpoint(
     assert result.ok is True
     assert result.probed_capability == "generation"
     assert calls and calls[0]["model"] == "gpt-4o"
+    assert calls[0]["instructions"]
+    assert calls[0]["max_output_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -173,6 +175,33 @@ async def test_model_check_probes_the_anthropic_messages_endpoint(monkeypatch) -
 
     assert result.ok is True
     assert calls and calls[0]["max_tokens"] == 1
+
+
+@pytest.mark.asyncio
+async def test_model_check_can_omit_openai_max_output_tokens(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class _Settings:
+        llm_openai_omit_max_output_tokens = ["catalog-gateway"]
+
+    class _Client:
+        def __init__(self, **_kwargs) -> None:
+            self.responses = self
+
+        async def create(self, **kwargs) -> object:
+            calls.append(kwargs)
+            return object()
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(connectivity, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(connectivity, "AsyncOpenAI", _Client)
+
+    result = await check_model(_provider(capabilities=["generation"]), "gpt-4o")
+
+    assert result.ok is True
+    assert calls and "max_output_tokens" not in calls[0]
 
 
 @pytest.mark.asyncio
@@ -387,3 +416,32 @@ async def test_env_credentials_fill_in_for_a_row_without_its_own_key(monkeypatch
     assert result.ok is True
     assert seen["api_key"] == "env-key"
     assert seen["base_url"] == "https://env.test/v1"
+
+
+@pytest.mark.asyncio
+async def test_row_credentials_are_decrypted_before_connectivity_probe(monkeypatch) -> None:
+    seen: dict = {}
+
+    class _Box:
+        def decrypt(self, value: str) -> str:
+            assert value == "enc:ciphertext"
+            return "plain-key"
+
+    class _Client:
+        def __init__(self, **kwargs) -> None:
+            seen.update(kwargs)
+            self.models = self
+
+        async def list(self, **_kwargs) -> _Page:
+            return _Page(1)
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(connectivity, "get_secret_box", lambda: _Box())
+    monkeypatch.setattr(connectivity, "AsyncOpenAI", _Client)
+
+    result = await check_instance(_provider(api_key="enc:ciphertext"))
+
+    assert result.ok is True
+    assert seen["api_key"] == "plain-key"

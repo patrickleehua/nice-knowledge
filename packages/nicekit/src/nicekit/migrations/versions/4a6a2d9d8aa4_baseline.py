@@ -35,7 +35,13 @@ _RLS_EXEMPT = frozenset({
 
 
 def _require_extensions() -> None:
-    """缺扩展就当场失败,而不是等 tsvector/vector 列建到一半才报错。"""
+    """缺扩展就当场失败,而不是等 tsvector/vector 列建到一半才报错。
+
+    pgcrypto 供检索链路的 digest() 用(嵌入内容指纹);它不在 deploy 的
+    initdb 脚本里而是在这里建——initdb 只跑一次,已有数据卷的环境升级时
+    不会重跑,放迁移里才能覆盖存量部署。
+    """
+    op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
     op.execute(
         """
         DO $$
@@ -43,7 +49,7 @@ def _require_extensions() -> None:
         BEGIN
             SELECT string_agg(required.name, ', ')
               INTO missing
-              FROM (VALUES ('vector'), ('pg_trgm'), ('zhparser')) AS required(name)
+              FROM (VALUES ('vector'), ('pg_trgm'), ('zhparser'), ('pgcrypto')) AS required(name)
              WHERE NOT EXISTS (
                  SELECT 1 FROM pg_extension WHERE extname = required.name
              );

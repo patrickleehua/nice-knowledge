@@ -46,15 +46,15 @@ seed 输出里带默认账号(`admin@demo.example.com` / `demo-admin-2026`)。�
 ## 冒烟验证
 
 ```bash
-curl -s localhost:8000/api/v1/health                       # {"status":"ok"}
-curl -s localhost:8000/metrics | head                      # Prometheus 文本
-TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/login \
+curl -s localhost:8020/api/v1/health                       # {"status":"ok"}
+curl -s localhost:8020/metrics | head                      # Prometheus 文本
+TOKEN=$(curl -s -X POST localhost:8020/api/v1/auth/login \
   -H 'content-type: application/json' \
   -d '{"email":"admin@demo.example.com","password":"demo-admin-2026","org_slug":"platform"}' \
   | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-curl -s -H "authorization: Bearer $TOKEN" localhost:8000/api/v1/kb/bases
-curl -s -H "authorization: Bearer $TOKEN" localhost:8000/api/v1/chat/sessions
-curl -s -H "authorization: Bearer $TOKEN" localhost:8000/api/v1/admin/agent-cards
+curl -s -H "authorization: Bearer $TOKEN" localhost:8020/api/v1/kb/bases
+curl -s -H "authorization: Bearer $TOKEN" localhost:8020/api/v1/chat/sessions
+curl -s -H "authorization: Bearer $TOKEN" localhost:8020/api/v1/admin/agent-cards
 ```
 
 `/api/v1/ready` 会逐依赖探测(DB / 活跃快照 / redis / 对象存储 / 配置),

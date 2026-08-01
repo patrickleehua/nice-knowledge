@@ -21,7 +21,7 @@ import uvicorn
 from nicekit.core.logging import setup_logging
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8000
+DEFAULT_PORT = 8020
 
 
 def main() -> None:

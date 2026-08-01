@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, API_BASE } from "@/lib/api";
 import { homeForRole, saveSession, type Role } from "@/lib/auth";
 import type { LoginResponse } from "@/lib/types";
 
@@ -21,12 +21,20 @@ interface FormValues {
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
+  const nextPath = params.get("next") ?? "";
+  const defaultOrgSlug = nextPath.startsWith("/admin")
+    ? "platform"
+    : nextPath.startsWith("/org")
+      ? "demo"
+      : "";
   const [loading, setLoading] = useState(false);
   const {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<FormValues>();
+  } = useForm<FormValues>({
+    defaultValues: { org_slug: defaultOrgSlug },
+  });
 
   async function onSubmit(values: FormValues) {
     setLoading(true);
@@ -49,7 +57,7 @@ function LoginForm() {
           ? "邮箱或密码错误"
           : err instanceof ApiError
             ? err.message
-            : "登录失败,请重试",
+            : `无法连接后端 API(${API_BASE})`,
       );
     } finally {
       setLoading(false);

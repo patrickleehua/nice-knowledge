@@ -38,6 +38,11 @@ def test_env_variable_names_unchanged(monkeypatch) -> None:
     assert s.websearch_max_results == 9
 
 
+def test_debug_accepts_release_env_value(monkeypatch) -> None:
+    monkeypatch.setenv("DEBUG", "release")
+    assert Settings().debug is False
+
+
 def test_secret_key_master_env_aliases(monkeypatch) -> None:
     monkeypatch.setenv("NICEKIT_SECRET_KEY", "from-nicekit-env")
     assert Settings().secret_key_master == "from-nicekit-env"

@@ -22,7 +22,7 @@ nicekit 是**平台框架包**,不是工具库。安装并装配后,你的项目
 
 **明确不包含**:任何行业业务逻辑。没有订单、工单、项目、客户这些概念——它们由你定义,通过扩展点接进来。
 
-**技术前提**(不可替换):PostgreSQL(需 pgvector + pg_trgm + zhparser)、Redis、S3 兼容对象存储、Python 3.13+。Celery 可选(有 inline 兜底)。
+**技术前提**(不可替换):PostgreSQL(需 pgvector + pg_trgm + zhparser + pgcrypto)、Redis、S3 兼容对象存储、Python 3.13+。Celery 可选(有 inline 兜底)。
 
 ---
 
@@ -287,6 +287,14 @@ def upgrade():
 | `JWT_SECRET` | ≥32 字节随机串 |
 | `NICEKIT_SECRET_KEY` | 密钥加密的 master key。**不配则密钥明文落库** |
 | `DATABASE_URL` / `MIGRATION_DATABASE_URL` | 应用账号 / 迁移账号,分离 |
+
+**嵌入/重排的凭证不走 env**:`EMBEDDING_PROVIDER`/`EMBEDDING_MODEL` 只是"首次部署
+用了哪个模型"的指纹,换模型要走 reindex campaign。真正的凭证是在管理端建一个
+provider 实例,再配 `kb.embedding` / `kb.search.rerank` 系统路由。
+
+> **Base URL 必须带版本段**(如 `https://api.siliconflow.cn/v1`)。SDK 把它当完整
+> 前缀直接拼 `/models`、`/embeddings`,少写 `/v1` 会得到一个没有上下文的 404;
+> 连通性测试会在这种情况下附带 `hint=base_url_missing_version_path` 提示。
 
 **接入 OpenAI 兼容网关**:`OPENAI_API_KEY` + `OPENAI_BASE_URL` 即可(`llm_providers`
 表为空时内置实例自动用这两项;管理端配了表行则以表为准)。若网关不接受 Responses

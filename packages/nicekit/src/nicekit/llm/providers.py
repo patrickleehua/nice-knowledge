@@ -16,7 +16,9 @@
 2. 一律流式(messages.stream / responses.stream + SDK 的 get_final_*)。结构化任务
    输出长(实测生成 8 日行程 ~6.7k tokens / 123 秒),非流式请求在网关的静默等待
    上限内出不来响应,会被直接断连(实测 60~180 秒);流式有持续增量,同一请求稳定
-   成功。两处 generate_with_tools 早已是流式,所以只有 pipeline 任务受影响过。
+   成功。generate_with_tools 也一律流式:它曾在 on_delta 为空时退回非流式,
+   而 KB 有据问答正是这样的调用方 —— 撞上网关不符合 Response schema 的非流式
+   响应体,SDK 解析成 str,直到读 `.output` 才炸 AttributeError(2026-08 修)。
 """
 
 import json
@@ -858,34 +860,37 @@ class OpenAIProvider:
             streamed_items: list = []
             # 引用注解同样走增量:网关裁剪 output 时,这是还原内置搜索来源的唯一途径
             streamed_annotations: list = []
-            if on_delta is None:
-                response = await self._client.responses.create(**request)
-            else:
-                stream = await self._client.responses.create(**request, stream=True)
-                response = None
-                async for event in stream:
-                    if event.type == "response.output_text.delta":
+            # 一律流式(见文件头设计裁决 2)。没有 on_delta 时也走流式:非流式
+            # 请求在兼容网关的静默等待上限内出不来响应会被断连,且实测有网关的
+            # 非流式响应体不符合 Response schema,SDK 会把它解析成 str,直到
+            # `response.output` 才炸成 AttributeError —— 报错点离病因十万八千里。
+            # KB 有据问答就是不带 on_delta 的调用方,曾因此 500。
+            stream = await self._client.responses.create(**request, stream=True)
+            response = None
+            async for event in stream:
+                if event.type == "response.output_text.delta":
+                    if on_delta is not None:
                         await on_delta(event.delta)
-                    elif (
-                        event.type == "response.reasoning_summary_text.delta"
-                        and event.delta
-                    ):
-                        streamed_thinking.append(event.delta)
-                        if on_thinking is not None:
-                            await on_thinking(event.delta)
-                    elif event.type == "response.output_item.done":
-                        streamed_items.append(event.item)
-                    elif event.type == "response.output_text.annotation.added":
-                        # 引用注解也走增量:网关裁剪终值 output 时,这里是唯一还原
-                        # 来源的途径(同 thinking 的兜底思路)。没有它,内置搜索
-                        # 就只剩"0 条来源"却带着结论,用户无从核实。
-                        streamed_annotations.append(event.annotation)
-                    elif event.type in ("response.completed", "response.incomplete"):
-                        response = event.response
-                    elif event.type == "response.failed":
-                        raise ProviderError("stream_error", retryable=True)
-                if response is None:
-                    raise ProviderError("stream_incomplete", retryable=True)
+                elif (
+                    event.type == "response.reasoning_summary_text.delta"
+                    and event.delta
+                ):
+                    streamed_thinking.append(event.delta)
+                    if on_thinking is not None:
+                        await on_thinking(event.delta)
+                elif event.type == "response.output_item.done":
+                    streamed_items.append(event.item)
+                elif event.type == "response.output_text.annotation.added":
+                    # 引用注解也走增量:网关裁剪终值 output 时,这里是唯一还原
+                    # 来源的途径(同 thinking 的兜底思路)。没有它,内置搜索
+                    # 就只剩"0 条来源"却带着结论,用户无从核实。
+                    streamed_annotations.append(event.annotation)
+                elif event.type in ("response.completed", "response.incomplete"):
+                    response = event.response
+                elif event.type == "response.failed":
+                    raise ProviderError("stream_error", retryable=True)
+            if response is None:
+                raise ProviderError("stream_incomplete", retryable=True)
         except openai.APITimeoutError as exc:
             raise _sdk_error("timeout", retryable=True, exc=exc) from None
         except openai.RateLimitError as exc:

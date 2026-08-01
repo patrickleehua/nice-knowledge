@@ -12,7 +12,7 @@ import {
 } from "@/lib/auth";
 
 // demo 后端默认监听 8020(apps/demo/backend/run.py 读 DEMO_PORT,默认 8020)
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8020";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8020";
 
 // ApiError 定义在零依赖的 lib/api-error.ts(见那里的注释),这里原样再导出,
 // 调用方仍可 `import { ApiError } from "@/lib/api"`。
