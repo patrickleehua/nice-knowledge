@@ -20,6 +20,11 @@ from nicekit.kb.effective_scope import (
 )
 from nicekit.kb.entity_binding import ENTITY_PREDICATE
 from nicekit.kb.entity_types import EntityValidationError, validate_entity_attributes
+from nicekit.kb.wiki_gen import (
+    PAGE_DRAFT_PENDING,
+    PAGE_ORIGIN_LLM,
+    WIKI_PUBLICATION_STATUS_KEY,
+)
 from nicekit.models.kb import (
     EvidenceSpan,
     FactClaim,
@@ -33,12 +38,6 @@ from nicekit.models.kb import (
     SnapshotFactSupport,
     SnapshotProjectionSupport,
 )
-
-# wiki 层常量的真源在 wiki_gen.py / wiki_review.py(后续波次搬入);那两个模块
-# 尚未进 SDK,先在此定义同名常量,搬入后改为从 wiki 模块 import(值必须一致)。
-PAGE_ORIGIN_LLM = "llm"
-PAGE_DRAFT_PENDING = "pending_review"
-WIKI_PUBLICATION_STATUS_KEY = "_wiki_publication_status"
 
 if TYPE_CHECKING:
     from nicekit.kb.snapshot import SnapshotBuildContext

@@ -120,10 +120,15 @@ def test_card_source_ref_round_trips_any_registered_type_key() -> None:
     assert parse_card_ref(None) is None
 
 
-def test_default_registry_requires_sql_wiki_graph_and_retrieval_materializers() -> None:
+def test_default_registry_requires_all_five_materializers() -> None:
+    """MIGRATION-PLAN A7:snapshot_media 搬入后自动注册为**必需** builder,
+    required_manifest 由 graph/retrieval/sql/wiki 变为含 snapshot_media 五项。"""
     assert projection_builders.required_manifest() == [
         {"name": "graph", "version": "2"},
         {"name": "retrieval", "version": "2"},
+        {"name": "snapshot_media", "version": "1"},
         {"name": "sql", "version": "2"},
         {"name": "wiki", "version": "2"},
     ]
+    # 全量清单与必需清单一致:默认注册的 builder 都是发布门禁
+    assert projection_builders.manifest() == projection_builders.required_manifest()

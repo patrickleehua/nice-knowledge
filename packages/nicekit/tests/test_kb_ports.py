@@ -179,7 +179,9 @@ async def test_notify_uses_registered_roles_and_link(monkeypatch) -> None:
 
     # 打包属性而不是 sys.modules:ports 里用的是 `from nicekit.capabilities import notify`,
     # 该语句优先取包属性,真实模块一旦被别的用例 import 过,sys.modules 替身就会被绕开。
+    # 先显式导入子模块,确保包属性存在(否则本文件单独跑时 setattr 找不到属性)。
     import nicekit.capabilities as capabilities
+    import nicekit.capabilities.notify  # noqa: F401
 
     monkeypatch.setattr(
         capabilities,
