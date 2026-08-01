@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from nicekit.api.deps import OrgContext, get_org_context, get_org_session, require_role
+from nicekit.api.deps import (
+    OrgContext,
+    get_org_context,
+    get_org_session,
+    require_write_role,
+)
 from nicekit.kb.effective_scope import live_snapshot_projection_filter
 from nicekit.kb.entity_types import (
     EntityReviewPolicy,
@@ -33,15 +38,14 @@ from nicekit.models.kb import (
     KbEntityType,
     KnowledgeBase,
 )
-from nicekit.models.tenancy import Role
 
 router = APIRouter(prefix="/kb")
 
 Session = Annotated[AsyncSession, Depends(get_org_session)]
 Ctx = Annotated[OrgContext, Depends(get_org_context)]
-# 内置角色只有三个(MIGRATION-PLAN §5.2);业务角色由宿主注册
-_KB_WRITERS: tuple[str, ...] = (Role.PLATFORM_ADMIN, Role.ORG_ADMIN)
-WriterCtx = Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))]
+# 写角色统一注册在 tenancy/roles.py(A13):内置 platform_admin/org_admin,
+# 宿主经 register_write_roles() 追加业务角色,守卫在请求期读注册表。
+WriterCtx = Annotated[OrgContext, Depends(require_write_role())]
 
 _REVIEW_POLICIES = tuple(p.value for p in EntityReviewPolicy)
 

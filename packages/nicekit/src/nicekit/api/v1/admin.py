@@ -1,17 +1,23 @@
-"""平台管理 API —— Agent 域(仅 platform_admin;MCP 另开 org_admin 可用的子路由)。
+"""平台管理 API(仅 platform_admin;MCP 另开 org_admin 可用的子路由)。
 
-搬自 TF backend/app/api/v1/admin.py 中与 Agent 子系统相关的部分:
-Prompt Registry / Prompt 目录登记 / Prompt 资源(只读)/ 组装预览 /
-Agent 卡与版本 / 工具目录 / Agent 运行日志(运行时上下文快照)/ 技能包 / MCP servers。
+搬自 TF backend/app/api/v1/admin.py。覆盖面:
+运维诊断与手动探测 / 租户管理 / 模型路由 / 提供商实例(双协议多实例)/
+Prompt Registry 与目录登记 / Prompt 资源(只读)与组装预览 / Agent 卡与版本 /
+工具目录 / Agent 运行日志 / 技能包 / MCP servers / 外部服务配置 / 用量 /
+模型计费 / LLM 请求日志。
 
-**本文件当前不含**(按迁移波次划分,避免与并行线撞车):
-- 模型路由 / 提供商实例 / 外部服务配置:属 LLM 层管理面。TF 的模型路由 PATCH
-  路径带一个"换嵌入主模型即启动重嵌 campaign"的副作用,直接耦合
-  `kb.embedding_reindex` 与 `services/dispatch`(任务分发注册表),两者都不在
-  本波交付范围。P4 装配期补齐时应把该副作用做成可注册的路由变更钩子,而不是
-  让 SDK 的 admin 直接 import KB。
-- 租户管理(orgs/users)、用量看板、计费、LLM traces:P4。
-- KB 相关 admin 端点:P3c。
+SDK 化改造:
+- ``SERVICE_CONFIG_NAMES`` 删掉 TF 的 ``"ota"``(旅游比价属业务);
+- 落库前统一经 ``core.secretbox`` 加密:提供商 ``api_key``、服务配置里的
+  密钥形字段、MCP 的 ``headers``/``env``;读出面一律掩码;
+- 工具目录从模块级 TOOLS 改查注入的 ``ToolRegistry``;
+- 系统能力槽位从 ``llm.capability_routes`` 的**注册表**派生,宿主追加的槽位
+  自动出现在模型路由目录里。
+
+两处 KB 触点(MIGRATION-PLAN §5.9 A12):
+①``_prepare_embedding_route_campaign()`` —— ``kb.embedding`` 路由换主模型时
+自动建重嵌 campaign 并经 ``runtime.dispatch`` 派发;②``_resolved_embedding_config()``
+—— service-configs 的 embedding 分支。
 
 访问控制在路由层(require_role):organizations/users/prompts/model_routes 均为
 无 RLS 的平台配置表。
@@ -21,11 +27,21 @@ import asyncio
 import logging
 import re
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from anthropic import AsyncAnthropic
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from openai import AsyncOpenAI
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import String, case, cast, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,17 +62,66 @@ from nicekit.agent.skills import (
 )
 from nicekit.agent.tools import default_registry
 from nicekit.api.deps import OrgContext, get_org_context, get_org_session, require_role
+from nicekit.capabilities.imagegen import service as imagegen_service
 from nicekit.core import cache
 from nicekit.core.config import get_settings
-from nicekit.core.db import get_session
+from nicekit.core.db import get_session, get_session_factory
+from nicekit.core.secretbox import get_secret_box
+from nicekit.core.security import hash_password
+from nicekit.domain.model_catalog import (
+    ManualModelCapabilities,
+    ModelCapability,
+    ModelCatalogCapabilityFilter,
+    ProviderModelCatalogEntry,
+    ProviderModelMetadata,
+)
+from nicekit.kb.embedding import (
+    EmbeddingFingerprint,
+    EmbeddingUnavailableError,
+    normalize_embedding_config,
+)
+from nicekit.kb.embedding_reindex import (
+    EmbeddingCampaignConflictError,
+    EmbeddingDimensionMismatchError,
+    create_embedding_campaign,
+)
 from nicekit.llm import prompt_catalog
-from nicekit.llm.registry import prompt_cache_key
+from nicekit.llm.capability_routes import EMBEDDING_ROUTE_TASK, capability_slots
+from nicekit.llm.connectivity import check_instance, check_model
+from nicekit.llm.model_catalog import (
+    build_model_catalog,
+    catalog_entry,
+    merge_imported_metadata,
+    metadata_from_manual,
+    metadata_from_provider_model,
+    metadata_from_registry,
+    normalize_model_ids,
+    provider_metadata_for_read,
+    provider_model_catalog_entry,
+    reconcile_provider_metadata,
+)
+from nicekit.llm.registry import prompt_cache_key, route_cache_key
+from nicekit.llm.runtime_config import load_runtime_overrides
+from nicekit.llm.service import LlmBudgetExceededError, env_provider_credentials
 from nicekit.models.chat import AgentCard, AgentCardVersion, ChatEvent, ChatSession
-from nicekit.models.llm import Prompt, PromptCatalogEntry
+from nicekit.models.kb import EMBEDDING_DIM
+from nicekit.models.llm import (
+    LlmTrace,
+    ModelPrice,
+    ModelRoute,
+    Prompt,
+    PromptCatalogEntry,
+)
+from nicekit.models.llm_provider import LlmProvider
 from nicekit.models.mcp import McpServer
-from nicekit.models.tenancy import Role
+from nicekit.models.service_config import ServiceConfig
+from nicekit.models.tenancy import Membership, Organization, Role, UsageDaily, User
+from nicekit.runtime.dispatch import dispatch_embedding_campaign
 
 logger = logging.getLogger(__name__)
+
+#: 密钥读出面统一掩码(落库是 SecretBox 密文,回传密文同样无意义)
+SERVICE_SECRET_MASK = "********"
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(require_role(Role.PLATFORM_ADMIN))])
 mcp_router = APIRouter(
@@ -1098,6 +1163,12 @@ def _validate_mcp_shape(transport: str, endpoint_url: str, command: str | None) 
         )
 
 
+def _encrypt_mcp_secrets(values: dict[str, str] | None) -> dict[str, str]:
+    """MCP ``headers``/``env`` 落库前逐值加密(§5.1;mcp_manager 连接前解密)。"""
+    box = get_secret_box()
+    return {str(k): box.encrypt(str(v)) for k, v in (values or {}).items()}
+
+
 def _require_platform_for_stdio(ctx: OrgContext, transport: str) -> None:
     """stdio 在宿主机拉起任意子进程,只允许平台管理员配置。"""
     if transport == "stdio" and ctx.role != Role.PLATFORM_ADMIN:
@@ -1178,6 +1249,8 @@ async def create_mcp_server(body: McpServerCreate, session: OrgSession, ctx: Ctx
     data = body.model_dump()
     if ctx.role != Role.PLATFORM_ADMIN:
         data["org_id"] = ctx.org_id
+    data["headers"] = _encrypt_mcp_secrets(data.get("headers"))
+    data["env"] = _encrypt_mcp_secrets(data.get("env"))
     server = McpServer(**data)
     session.add(server)
     await session.commit()
@@ -1198,6 +1271,9 @@ async def update_mcp_server(
         patch.get("endpoint_url", server.endpoint_url) or "",
         patch.get("command", server.command),
     )
+    for field in ("headers", "env"):
+        if field in patch:
+            patch[field] = _encrypt_mcp_secrets(patch[field])
     for key, value in patch.items():
         setattr(server, key, value)
     session.add(server)
@@ -1229,3 +1305,1710 @@ async def test_mcp_server(server_id: UUID, session: OrgSession, ctx: Ctx) -> dic
             for tool in tools
         ],
     }
+
+
+# ---------- 运维诊断 ----------
+
+
+@router.get("/operations/diagnostics")
+async def get_operations_diagnostics() -> dict:
+    """Deep operator view; provider inference remains scheduled, never per request."""
+    from nicekit.operations.diagnostics import collect_operator_diagnostics
+
+    return await collect_operator_diagnostics(get_session_factory())
+
+
+@router.post("/operations/probe")
+async def run_operations_probe() -> dict:
+    """Run provider and MCP probes now and return the refreshed diagnostics.
+
+    The scheduled cycle stays the source of truth for ``ProviderProbeStatus``;
+    this endpoint runs the same code path so an operator does not have to wait
+    out the interval after fixing a credential. MCP connections are refreshed
+    after the provider cycle. This makes real upstream calls, hence POST rather
+    than a cache-warming GET.
+    """
+    from nicekit.operations.diagnostics import collect_operator_diagnostics
+    from nicekit.operations.probes import run_scheduled_provider_probes
+
+    factory = get_session_factory()
+    try:
+        await run_scheduled_provider_probes(factory)
+    except Exception as exc:  # noqa: BLE001 - never surface upstream internals
+        # A probe failure is data, not an API error: the per-capability status
+        # is already persisted, so still return the refreshed snapshot.
+        logger.warning("手动能力检测未完整执行:%s", type(exc).__name__)
+    return await collect_operator_diagnostics(factory, refresh_mcp=True)
+
+
+# ---------- 租户管理 ----------
+
+
+class OrgCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    slug: str = Field(min_length=2, max_length=100, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    # 可选:同时开通首个 org_admin(已注册用户只加成员关系,忽略密码/姓名)
+    admin_email: EmailStr | None = None
+    admin_password: str | None = Field(default=None, min_length=8)
+    admin_full_name: str | None = None
+
+
+class OrgUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_active: bool | None = None
+
+
+class OrgOut(BaseModel):
+    id: UUID
+    name: str
+    slug: str
+    is_active: bool
+    member_count: int
+    created_at: datetime | None
+
+
+async def _org_out(session: AsyncSession, org: Organization) -> OrgOut:
+    count = (
+        await session.execute(
+            select(func.count()).select_from(Membership).where(Membership.org_id == org.id)
+        )
+    ).scalar_one()
+    return OrgOut(
+        id=org.id,
+        name=org.name,
+        slug=org.slug,
+        is_active=org.is_active,
+        member_count=count,
+        created_at=org.created_at,
+    )
+
+
+@router.get("/orgs", response_model=list[OrgOut])
+async def list_orgs(session: Session) -> list[OrgOut]:
+    orgs = (
+        (await session.execute(select(Organization).order_by(Organization.created_at)))
+        .scalars()
+        .all()
+    )
+    counts = dict(
+        (
+            await session.execute(
+                select(Membership.org_id, func.count()).group_by(Membership.org_id)
+            )
+        ).all()
+    )
+    return [
+        OrgOut(
+            id=o.id,
+            name=o.name,
+            slug=o.slug,
+            is_active=o.is_active,
+            member_count=counts.get(o.id, 0),
+            created_at=o.created_at,
+        )
+        for o in orgs
+    ]
+
+
+@router.post("/orgs", response_model=OrgOut, status_code=status.HTTP_201_CREATED)
+async def create_org(body: OrgCreate, session: Session) -> OrgOut:
+    exists = (
+        await session.execute(select(Organization).where(Organization.slug == body.slug))
+    ).scalar_one_or_none()
+    if exists is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"slug {body.slug!r} 已被占用")
+
+    org = Organization(name=body.name, slug=body.slug)
+    session.add(org)
+    await session.flush()
+
+    if body.admin_email is not None:
+        user = (
+            await session.execute(select(User).where(User.email == body.admin_email))
+        ).scalar_one_or_none()
+        if user is None:
+            if not body.admin_password:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    "新用户必须提供 admin_password(至少 8 位)",
+                )
+            user = User(
+                email=body.admin_email,
+                password_hash=hash_password(body.admin_password),
+                full_name=body.admin_full_name or body.admin_email.split("@")[0],
+            )
+            session.add(user)
+            await session.flush()
+        session.add(Membership(org_id=org.id, user_id=user.id, role=Role.ORG_ADMIN))
+
+    await session.commit()
+    await session.refresh(org)
+    return await _org_out(session, org)
+
+
+@router.patch("/orgs/{org_id}", response_model=OrgOut)
+async def update_org(org_id: UUID, body: OrgUpdate, session: Session) -> OrgOut:
+    org = (
+        await session.execute(select(Organization).where(Organization.id == org_id))
+    ).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "组织不存在")
+    if body.name is not None:
+        org.name = body.name
+    if body.is_active is not None:
+        org.is_active = body.is_active
+    session.add(org)
+    await session.commit()
+    await session.refresh(org)
+    return await _org_out(session, org)
+
+
+# ---------- 模型路由 ----------
+
+
+class RouteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    org_id: UUID | None = None  # None = 平台默认
+    task: str = Field(min_length=1, max_length=100)
+    primary_provider: str = Field(min_length=1, max_length=50)
+    primary_model: str = Field(min_length=1, max_length=300)
+    fallback_chain: list[dict] | None = None
+    max_tokens: int = Field(default=8192, ge=1)
+    timeout_seconds: float = Field(default=120.0, gt=0)
+    is_active: bool = True
+
+    @field_validator("task")
+    @classmethod
+    def normalize_task(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("task 不能为空")
+        return value
+
+
+class RouteUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_provider: str | None = Field(default=None, min_length=1, max_length=50)
+    primary_model: str | None = Field(default=None, min_length=1, max_length=300)
+    fallback_chain: list[dict] | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    is_active: bool | None = None
+
+
+class RouteBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tasks: list[str] = Field(min_length=1, max_length=100)
+    org_id: UUID | None = None
+    primary_provider: str = Field(min_length=1, max_length=50)
+    primary_model: str = Field(min_length=1, max_length=300)
+    fallback_chain: list[dict] | None = None
+    max_tokens: int = Field(default=8192, ge=1)
+    timeout_seconds: float = Field(default=120.0, gt=0)
+    is_active: bool = True
+
+    @field_validator("tasks")
+    @classmethod
+    def normalize_tasks(cls, values: list[str]) -> list[str]:
+        tasks = [value.strip() for value in values]
+        if any(not task for task in tasks):
+            raise ValueError("tasks 不能包含空任务")
+        if len(set(tasks)) != len(tasks):
+            raise ValueError("tasks 不能重复")
+        return tasks
+
+
+class RouteTaskCatalogOut(BaseModel):
+    task: str
+    label: str
+    description: str
+    category: str
+    is_system: bool
+
+
+def _validate_chain(chain: list[dict] | None) -> None:
+    for hop in chain or []:
+        if set(hop.keys()) != {"provider", "model"} or not all(
+            isinstance(v, str) and v for v in hop.values()
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                'fallback_chain 每项必须是 {"provider": str, "model": str}',
+            )
+
+
+# 系统能力槽位的展示文案。槽位本身来自 llm.capability_routes 注册表(宿主可追加),
+# 这里只为四个内置槽位提供中文名/说明;未登记文案的槽位回退用 task 名。
+_SYSTEM_ROUTE_LABELS: dict[str, str] = {
+    "kb.embedding": "嵌入",
+    "kb.search.rerank": "重排",
+    "kb.image.caption": "视觉",
+    "llm.default": "对话",
+}
+
+_SYSTEM_ROUTE_DESCRIPTIONS: dict[str, str] = {
+    "kb.embedding": "知识库向量化;换主模型会先启动重嵌",
+    "kb.search.rerank": "检索结果重排;按顺序即时降级",
+    "kb.image.caption": "图片描述与 Agent 图像核验",
+    "llm.default": "普通生成任务没有专属路由时的统一基线",
+}
+
+
+def _system_route_label(task: str) -> str:
+    label = _SYSTEM_ROUTE_LABELS.get(task)
+    return f"{label}模型" if label else task
+
+
+_ROUTE_ONLY_TASK_CATALOG: dict[str, tuple[str, str, str]] = {
+    DEFAULT_AGENT_TASK: (
+        "Agent 工作台",
+        "默认 Agent 卡与已发布专员共用的长任务模型路由",
+        "agent",
+    ),
+    "kb.answer": (
+        "知识库问答",
+        "知识库问答生成链路;可独立控制回答模型、时延和降级顺序",
+        "kb",
+    ),
+}
+
+
+async def _model_route_task_catalog(session: AsyncSession) -> list[RouteTaskCatalogOut]:
+    """汇总受治理的可路由任务;越靠后的来源展示优先级越高。"""
+    prompt_tasks = (await session.execute(select(Prompt.task).distinct())).scalars().all()
+    custom_entries = (await session.execute(select(PromptCatalogEntry))).scalars().all()
+    cards = (
+        (
+            await session.execute(
+                select(AgentCard)
+                .where(AgentCard.is_active.is_(True))
+                .order_by(AgentCard.name, AgentCard.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    active_versions = (
+        (
+            await session.execute(
+                select(AgentCardVersion).where(AgentCardVersion.is_active.is_(True))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    version_by_card = {version.card_id: version for version in active_versions}
+    route_tasks = (await session.execute(select(ModelRoute.task).distinct())).scalars().all()
+
+    items: dict[str, RouteTaskCatalogOut] = {}
+
+    def put(
+        task: str,
+        *,
+        label: str,
+        description: str,
+        category: str,
+        is_system: bool = False,
+    ) -> None:
+        items[task] = RouteTaskCatalogOut(
+            task=task,
+            label=label,
+            description=description,
+            category=category,
+            is_system=is_system,
+        )
+
+    # 既有路由和未登记 Prompt 仅提供标识回退,避免历史任务从目录消失。
+    for task in sorted(set(route_tasks) | set(prompt_tasks)):
+        put(task, label=task, description="", category=prompt_catalog.category_of(task))
+
+    # Agent 当前生效版本提供面向运营者的名称和说明。
+    seen_agent_tasks: set[str] = set()
+    for card in cards:
+        version = version_by_card.get(card.id)
+        task = version.model_task if version is not None else card.model_task
+        if task in seen_agent_tasks:
+            continue
+        seen_agent_tasks.add(task)
+        put(
+            task,
+            label=card.name,
+            description=card.description or "Agent 运行时使用的模型任务",
+            category="agent",
+        )
+
+    # 在线登记和源码内置目录的描述比实体名称更精确。
+    for entry in custom_entries:
+        put(
+            entry.task,
+            label=entry.name_zh,
+            description=entry.description,
+            category=prompt_catalog.category_of(entry.task),
+        )
+    for task, entry in prompt_catalog.BUILTIN_PROMPT_CATALOG.items():
+        put(
+            task,
+            label=entry["name_zh"],
+            description=entry["description"],
+            category=entry["category"],
+        )
+    for task, (label, description, category) in _ROUTE_ONLY_TASK_CATALOG.items():
+        put(task, label=label, description=description, category=category)
+
+    # 系统能力槽位拥有最高展示优先级,并由前端单独管理。
+    for task in capability_slots():
+        put(
+            task,
+            label=_system_route_label(task),
+            description=_SYSTEM_ROUTE_DESCRIPTIONS.get(task, ""),
+            category="system",
+            is_system=True,
+        )
+
+    return sorted(
+        items.values(),
+        key=lambda item: (
+            not item.is_system,
+            item.category,
+            item.label.casefold(),
+            item.task,
+        ),
+    )
+
+
+async def _ensure_route_scope_available(
+    session: AsyncSession, *, tasks: list[str], org_id: UUID | None
+) -> None:
+    statement = select(ModelRoute).where(ModelRoute.task.in_(tasks))
+    statement = (
+        statement.where(ModelRoute.org_id.is_(None))
+        if org_id is None
+        else statement.where(ModelRoute.org_id == org_id)
+    )
+    existing = (await session.execute(statement)).scalars().all()
+    if existing:
+        conflicts = "、".join(sorted({route.task for route in existing}))
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"所选作用域已配置任务路由:{conflicts}",
+        )
+
+
+async def _ensure_route_org_exists(session: AsyncSession, org_id: UUID | None) -> None:
+    if org_id is None:
+        return
+    org = (
+        await session.execute(select(Organization).where(Organization.id == org_id))
+    ).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "org_id 对应组织不存在")
+
+
+async def _validate_route_targets(
+    session: AsyncSession,
+    *,
+    task: str,
+    org_id: UUID | None,
+    primary_provider: str,
+    primary_model: str,
+    fallback_chain: list[dict] | None,
+) -> None:
+    hops = [
+        {"provider": primary_provider, "model": primary_model},
+        *(fallback_chain or []),
+    ]
+    seen: set[tuple[str, str]] = set()
+    for hop in hops:
+        key = (hop["provider"].strip(), hop["model"].strip())
+        if key in seen:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"路由链节点不可重复:{key[0]}/{key[1]}",
+            )
+        seen.add(key)
+
+    slot = capability_slots().get(task)
+    if slot is None:
+        return
+    label = _system_route_label(task)
+    if org_id is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"{label}是平台级系统路由,不支持组织级覆盖",
+        )
+    providers = {
+        row.name: row for row in (await session.execute(select(LlmProvider))).scalars().all()
+    }
+    for hop in hops:
+        provider = providers.get(hop["provider"])
+        if provider is None or not provider.enabled:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"系统路由提供商不可用:{hop['provider']}",
+            )
+        if slot.openai_only and provider.protocol != "openai":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"{label}路由仅支持 OpenAI 兼容协议:{provider.name}",
+            )
+        metadata = provider_metadata_for_read(provider).get(hop["model"])
+        if metadata is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"模型不在提供商目录中:{provider.name}/{hop['model']}",
+            )
+        missing = [
+            capability
+            for capability in slot.capabilities
+            if capability not in metadata.capabilities
+        ]
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"模型未标注 {'+'.join(missing)} 能力:{provider.name}/{hop['model']}",
+            )
+
+
+async def _prepare_embedding_route_campaign(
+    session: AsyncSession,
+    *,
+    task: str,
+    provider: str,
+    model: str,
+):
+    """A12 触点①:``kb.embedding`` 主模型变更 → 建重嵌 campaign(指纹相同则跳过)。
+
+    campaign 在路由落库**之前**创建:建不出来(维度不匹配 / 探测失败 / 预算超限)
+    就整个请求失败,绝不出现"路由已切、向量还是旧模型"的半途状态。
+    """
+    if task != EMBEDDING_ROUTE_TASK:
+        return None
+    row = (
+        await session.execute(select(ServiceConfig).where(ServiceConfig.name == "embedding"))
+    ).scalar_one_or_none()
+    source = _resolved_embedding_config(row.payload if row is not None else None)
+    target = {"provider": provider, "model": model, "dim": source["dim"]}
+    if EmbeddingFingerprint.from_config(source) == EmbeddingFingerprint.from_config(target):
+        return None
+    try:
+        return await create_embedding_campaign(
+            get_session_factory(),
+            target,
+            dual_read_seconds=get_settings().embedding_dual_read_seconds,
+        )
+    except EmbeddingDimensionMismatchError as exc:
+        detail = exc.as_dict()
+        detail["runbook"] = EMBEDDING_OFFLINE_RUNBOOK
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail) from exc
+    except EmbeddingUnavailableError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "embedding_probe_failed", "message": str(exc)},
+        ) from exc
+    except LlmBudgetExceededError as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            {"code": "embedding_budget_exceeded", "message": str(exc)},
+        ) from exc
+    except EmbeddingCampaignConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+# ---------- 模型提供商实例(多实例双协议混用) ----------
+
+
+class ProviderCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=50, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    protocol: str = Field(pattern=r"^(openai|anthropic)$")
+    api_key: str = Field(default="", max_length=500)
+    base_url: str = Field(default="", max_length=2000)
+    models: list[str] = Field(default_factory=list)
+    model_metadata: dict[str, ManualModelCapabilities] = Field(default_factory=dict)
+    enabled: bool = True
+
+    @field_validator("models")
+    @classmethod
+    def _normalize_models(cls, values: list[str]) -> list[str]:
+        return normalize_model_ids(values)
+
+    @model_validator(mode="after")
+    def _metadata_models_exist(self) -> "ProviderCreate":
+        unknown = set(self.model_metadata) - set(self.models)
+        if unknown:
+            raise ValueError("model_metadata 只能引用 models 中的模型")
+        return self
+
+
+class ProviderUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol: str | None = Field(default=None, pattern=r"^(openai|anthropic)$")
+    api_key: str | None = Field(default=None, max_length=500)
+    base_url: str | None = Field(default=None, max_length=2000)
+    models: list[str] | None = None
+    model_metadata: dict[str, ManualModelCapabilities] | None = None
+    enabled: bool | None = None
+
+    @field_validator("models")
+    @classmethod
+    def _normalize_models(cls, values: list[str] | None) -> list[str] | None:
+        return normalize_model_ids(values) if values is not None else None
+
+
+class ProviderRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    protocol: str
+    api_key: str  # 掩码值,永不回传明文/密文
+    has_api_key: bool
+    base_url: str
+    models: list[str]
+    model_metadata: dict[str, ProviderModelMetadata]
+    enabled: bool
+    is_builtin: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class ProviderModelCapabilityUpdate(ManualModelCapabilities):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1, max_length=300)
+    mode: Literal["manual", "auto"] = "manual"
+
+    @field_validator("model")
+    @classmethod
+    def _normalize_model(cls, value: str) -> str:
+        return normalize_model_ids([value])[0]
+
+    @model_validator(mode="after")
+    def _auto_has_no_manual_values(self) -> "ProviderModelCapabilityUpdate":
+        if self.mode == "auto" and (self.capabilities or self.input_modalities is not None):
+            raise ValueError("auto 模式不可同时提交手工能力")
+        return self
+
+
+class ProviderModelImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    models: list[str] = Field(min_length=1, max_length=2000)
+
+    @field_validator("models")
+    @classmethod
+    def _normalize_models(cls, values: list[str]) -> list[str]:
+        return normalize_model_ids(values)
+
+
+class ProviderModelConnectivityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1, max_length=300)
+
+    @field_validator("model")
+    @classmethod
+    def _normalize_model(cls, value: str) -> str:
+        return normalize_model_ids([value])[0]
+
+
+class ProviderConnectivityRead(BaseModel):
+    """Connectivity outcome. Never carries raw upstream bodies or credentials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    model: str | None = None
+    scope: Literal["instance", "model"]
+    ok: bool
+    latency_ms: float | None
+    error_code: str | None
+    model_count: int | None = None
+    probed_capability: ModelCapability | None = None
+
+
+def _provider_read(row: LlmProvider) -> ProviderRead:
+    """读出面永远掩码 api_key:落库值是 SecretBox 密文,回传密文同样无意义。"""
+    return ProviderRead(
+        id=row.id,
+        name=row.name,
+        protocol=row.protocol,
+        api_key=SERVICE_SECRET_MASK if row.api_key else "",
+        has_api_key=bool(row.api_key),
+        base_url=row.base_url,
+        models=normalize_model_ids(row.models or []),
+        model_metadata=provider_metadata_for_read(row),
+        enabled=row.enabled,
+        is_builtin=row.is_builtin,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _encrypt_api_key(value: str) -> str:
+    """落库前加密(空串直通;掩码值由调用方先行剔除)。"""
+    return get_secret_box().encrypt(value) if value else ""
+
+
+async def _provider_or_404(session: AsyncSession, provider_id: UUID) -> LlmProvider:
+    row = (
+        await session.execute(select(LlmProvider).where(LlmProvider.id == provider_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "提供商不存在")
+    return row
+
+
+async def _fetch_provider_models(row: LlmProvider) -> list[object]:
+    env = env_provider_credentials().get(row.name)
+    api_key = get_secret_box().decrypt(row.api_key) if row.api_key else (env[1] if env else "")
+    base_url = row.base_url or (env[2] if env else "")
+    if not api_key:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "该实例未配置 API 密钥")
+    client: object | None = None
+    try:
+        if row.protocol == "anthropic":
+            client = AsyncAnthropic(api_key=api_key, base_url=base_url or None)
+        else:
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url or None)
+        page = await client.models.list(timeout=15)  # type: ignore[union-attr]
+        return list(page.data)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"该网关不支持模型导入或调用失败:{exc}",
+        ) from exc
+    finally:
+        close = getattr(client, "close", None)
+        if close is not None:
+            await close()
+
+
+@router.get("/providers", response_model=list[ProviderRead])
+async def list_providers(session: Session) -> list[ProviderRead]:
+    rows = (
+        (
+            await session.execute(
+                # name 兜底排序:内置两行 created_at 相同,顺序必须稳定
+                # (前端"默认选中第一项"依赖它)
+                select(LlmProvider).order_by(
+                    LlmProvider.is_builtin.desc(),
+                    LlmProvider.created_at,
+                    LlmProvider.name,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_provider_read(row) for row in rows]
+
+
+@router.post("/providers", response_model=ProviderRead, status_code=status.HTTP_201_CREATED)
+async def create_provider(body: ProviderCreate, session: Session) -> ProviderRead:
+    values = body.model_dump(exclude={"model_metadata"})
+    values["api_key"] = _encrypt_api_key(values.get("api_key") or "")
+    row = LlmProvider(**values)
+    row.model_metadata = reconcile_provider_metadata(row.models, {})
+    for model_id, manual in body.model_metadata.items():
+        row.model_metadata[model_id] = metadata_from_manual(manual).model_dump(mode="json")
+    session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "实例名已存在") from exc
+    await session.refresh(row)
+    await load_runtime_overrides(get_session_factory())
+    return _provider_read(row)
+
+
+@router.patch("/providers/{provider_id}", response_model=ProviderRead)
+async def update_provider(
+    provider_id: UUID, body: ProviderUpdate, session: Session
+) -> ProviderRead:
+    row = await _provider_or_404(session, provider_id)
+    patch = body.model_dump(exclude_unset=True)
+    manual_metadata = patch.pop("model_metadata", None)
+    if row.is_builtin and patch.get("protocol") not in (None, row.protocol):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "内置实例协议不可改")
+    if "api_key" in patch:
+        # 前端回传掩码 = "不改密钥"(读出面拿不到明文,只能这么表达)
+        if patch["api_key"] == SERVICE_SECRET_MASK:
+            patch.pop("api_key")
+        else:
+            patch["api_key"] = _encrypt_api_key(patch["api_key"] or "")
+    final_models = patch.get("models", row.models or [])
+    unknown_metadata = set(manual_metadata or {}) - set(final_models)
+    if unknown_metadata:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "model_metadata 只能引用 models 中的模型",
+        )
+    for key, value in patch.items():
+        setattr(row, key, value)
+    row.models = normalize_model_ids(final_models)
+    row.model_metadata = reconcile_provider_metadata(row.models, row.model_metadata)
+    for model_id, manual in (manual_metadata or {}).items():
+        current = row.model_metadata.get(model_id, {})
+        provider_metadata = (
+            current.get("provider_metadata", {}) if isinstance(current, dict) else {}
+        )
+        row.model_metadata[model_id] = metadata_from_manual(
+            ManualModelCapabilities.model_validate(manual),
+            provider_metadata=provider_metadata,
+        ).model_dump(mode="json")
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    await load_runtime_overrides(get_session_factory())
+    return _provider_read(row)
+
+
+@router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider(provider_id: UUID, session: Session) -> None:
+    row = await _provider_or_404(session, provider_id)
+    if row.is_builtin:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "内置实例不可删除,可停用")
+    routes = (await session.execute(select(ModelRoute))).scalars().all()
+    referenced = any(
+        route.primary_provider == row.name
+        or any(hop.get("provider") == row.name for hop in route.fallback_chain or [])
+        for route in routes
+    )
+    if referenced:
+        raise HTTPException(status.HTTP_409_CONFLICT, "有模型路由引用该实例,先调整路由再删除")
+    await session.delete(row)
+    await session.commit()
+    await load_runtime_overrides(get_session_factory())
+
+
+@router.get(
+    "/providers/{provider_id}/discover-models",
+    response_model=list[ProviderModelCatalogEntry],
+)
+async def discover_provider_models(
+    provider_id: UUID,
+    session: Session,
+) -> list[ProviderModelCatalogEntry]:
+    """Read the remote catalog without changing the provider inventory."""
+    row = await _provider_or_404(session, provider_id)
+    discovered: dict[str, ProviderModelMetadata] = {}
+    try:
+        for provider_model in await _fetch_provider_models(row):
+            model_id, metadata = metadata_from_provider_model(provider_model)
+            discovered[model_id] = metadata
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"网关模型目录格式无效:{exc}",
+        ) from exc
+    return [
+        catalog_entry(row.name, model_id, metadata)
+        for model_id, metadata in sorted(discovered.items(), key=lambda item: item[0].casefold())
+    ]
+
+
+@router.post("/providers/{provider_id}/import-models", response_model=ProviderRead)
+async def import_provider_models(
+    provider_id: UUID,
+    body: ProviderModelImport,
+    session: Session,
+) -> ProviderRead:
+    """Re-read the remote catalog and persist only the explicitly selected IDs."""
+    row = await _provider_or_404(session, provider_id)
+    discovered = await _fetch_provider_models(row)
+    selected_ids = set(body.models)
+    selected: list[object] = []
+    discovered_ids: set[str] = set()
+    try:
+        for provider_model in discovered:
+            model_id, _ = metadata_from_provider_model(provider_model)
+            discovered_ids.add(model_id)
+            if model_id in selected_ids:
+                selected.append(provider_model)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"网关模型目录格式无效:{exc}",
+        ) from exc
+    missing = selected_ids - discovered_ids
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"所选模型已不在网关目录中:{', '.join(sorted(missing))}",
+        )
+    row.models, row.model_metadata = merge_imported_metadata(
+        existing_models=row.models or [],
+        existing_metadata=row.model_metadata,
+        imported_models=selected,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    await load_runtime_overrides(get_session_factory())
+    return _provider_read(row)
+
+
+@router.post(
+    "/providers/{provider_id}/test-connection",
+    response_model=ProviderConnectivityRead,
+)
+async def test_provider_connection(
+    provider_id: UUID,
+    session: Session,
+) -> ProviderConnectivityRead:
+    """Prove the credentials and network path by listing the remote catalog."""
+    row = await _provider_or_404(session, provider_id)
+    result = await check_instance(row, env=env_provider_credentials().get(row.name))
+    return ProviderConnectivityRead(
+        provider=row.name,
+        scope="instance",
+        ok=result.ok,
+        latency_ms=result.latency_ms,
+        error_code=result.error_code,
+        model_count=result.model_count,
+    )
+
+
+@router.post(
+    "/providers/{provider_id}/test-model",
+    response_model=ProviderConnectivityRead,
+)
+async def test_provider_model(
+    provider_id: UUID,
+    body: ProviderModelConnectivityRequest,
+    session: Session,
+) -> ProviderConnectivityRead:
+    """Send one minimal real request, shaped by the model's declared capability.
+
+    A gateway routinely lists models it cannot serve, so a successful instance
+    check says nothing about any single model ID.
+    """
+    row = await _provider_or_404(session, provider_id)
+    result = await check_model(row, body.model, env=env_provider_credentials().get(row.name))
+    return ProviderConnectivityRead(
+        provider=row.name,
+        model=body.model,
+        scope="model",
+        ok=result.ok,
+        latency_ms=result.latency_ms,
+        error_code=result.error_code,
+        probed_capability=result.probed_capability,
+    )
+
+
+@router.put(
+    "/providers/{provider_id}/model-capabilities",
+    response_model=ProviderModelCatalogEntry,
+)
+async def update_provider_model_capabilities(
+    provider_id: UUID,
+    body: ProviderModelCapabilityUpdate,
+    session: Session,
+) -> ProviderModelCatalogEntry:
+    row = await _provider_or_404(session, provider_id)
+    if body.model not in set(row.models or []):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "模型不存在")
+    row.model_metadata = reconcile_provider_metadata(row.models, row.model_metadata)
+    current = row.model_metadata.get(body.model, {})
+    provider_metadata = current.get("provider_metadata", {}) if isinstance(current, dict) else {}
+    if body.mode == "auto":
+        resolved = metadata_from_registry(body.model)
+        resolved.provider_metadata = dict(provider_metadata)
+    else:
+        resolved = metadata_from_manual(
+            ManualModelCapabilities(
+                capabilities=body.capabilities,
+                input_modalities=body.input_modalities,
+            ),
+            provider_metadata=provider_metadata,
+        )
+    row.model_metadata[body.model] = resolved.model_dump(mode="json")
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    await load_runtime_overrides(get_session_factory())
+    return provider_model_catalog_entry(row, body.model)
+
+
+@router.get("/model-catalog", response_model=list[ProviderModelCatalogEntry])
+async def get_provider_model_catalog(
+    session: Session,
+    capability: ModelCatalogCapabilityFilter | None = None,
+) -> list[ProviderModelCatalogEntry]:
+    providers = (await session.execute(select(LlmProvider))).scalars().all()
+    return build_model_catalog(providers, capability=capability)
+
+
+@router.get("/models", response_model=list[ModelRoute])
+async def list_routes(session: Session) -> list[ModelRoute]:
+    return (
+        (
+            await session.execute(
+                select(ModelRoute).order_by(ModelRoute.task, ModelRoute.org_id.nulls_first())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@router.get("/model-route-tasks", response_model=list[RouteTaskCatalogOut])
+async def list_model_route_tasks(session: Session) -> list[RouteTaskCatalogOut]:
+    return await _model_route_task_catalog(session)
+
+
+async def _invalidate_route_cache(route: ModelRoute) -> None:
+    """路由变更主动失效解析缓存(共享 redis,API/worker 同步生效):
+    org 级删精确键;平台级(org_id=None)影响所有 org,按 task 前缀删。"""
+    if route.org_id is not None:
+        await cache.delete(route_cache_key(route.task, route.org_id))
+    else:
+        await cache.delete_by_prefix(f"llm:route:{route.task}:")
+
+
+@router.post("/models", response_model=ModelRoute, status_code=status.HTTP_201_CREATED)
+async def create_route(
+    body: RouteCreate,
+    session: Session,
+    background: BackgroundTasks,
+) -> ModelRoute:
+    _validate_chain(body.fallback_chain)
+    await _ensure_route_org_exists(session, body.org_id)
+    await _ensure_route_scope_available(session, tasks=[body.task], org_id=body.org_id)
+    await _validate_route_targets(
+        session,
+        task=body.task,
+        org_id=body.org_id,
+        primary_provider=body.primary_provider,
+        primary_model=body.primary_model,
+        fallback_chain=body.fallback_chain,
+    )
+    campaign = (
+        await _prepare_embedding_route_campaign(
+            session,
+            task=body.task,
+            provider=body.primary_provider,
+            model=body.primary_model,
+        )
+        if body.is_active
+        else None
+    )
+    route = ModelRoute(**body.model_dump())
+    session.add(route)
+    await session.commit()
+    await session.refresh(route)
+    await _invalidate_route_cache(route)
+    await load_runtime_overrides(get_session_factory())
+    if campaign is not None:
+        await dispatch_embedding_campaign(campaign.id, background)
+    return route
+
+
+@router.post(
+    "/models/batch",
+    response_model=list[ModelRoute],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_routes_batch(body: RouteBatchCreate, session: Session) -> list[ModelRoute]:
+    """为多个未配置业务任务原子创建同一份专属路由。"""
+    _validate_chain(body.fallback_chain)
+    await _ensure_route_org_exists(session, body.org_id)
+
+    catalog = await _model_route_task_catalog(session)
+    custom_tasks = {item.task for item in catalog if not item.is_system}
+    unknown = sorted(set(body.tasks) - custom_tasks)
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"任务不在可配置目录中:{'、'.join(unknown)}",
+        )
+    await _ensure_route_scope_available(session, tasks=body.tasks, org_id=body.org_id)
+    for task in body.tasks:
+        await _validate_route_targets(
+            session,
+            task=task,
+            org_id=body.org_id,
+            primary_provider=body.primary_provider,
+            primary_model=body.primary_model,
+            fallback_chain=body.fallback_chain,
+        )
+
+    common = body.model_dump(exclude={"tasks"})
+    routes = [ModelRoute(task=task, **common) for task in body.tasks]
+    session.add_all(routes)
+    await session.commit()
+    for route in routes:
+        await session.refresh(route)
+        await _invalidate_route_cache(route)
+    await load_runtime_overrides(get_session_factory())
+    return routes
+
+
+@router.patch("/models/{route_id}", response_model=ModelRoute)
+async def update_route(
+    route_id: UUID,
+    body: RouteUpdate,
+    session: Session,
+    background: BackgroundTasks,
+) -> ModelRoute:
+    route = (
+        await session.execute(select(ModelRoute).where(ModelRoute.id == route_id))
+    ).scalar_one_or_none()
+    if route is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "路由不存在")
+    data = body.model_dump(exclude_unset=True)
+    if "fallback_chain" in data:
+        _validate_chain(data["fallback_chain"])
+    target_provider = data.get("primary_provider", route.primary_provider)
+    target_model = data.get("primary_model", route.primary_model)
+    target_active = data.get("is_active", route.is_active)
+    route_fields_changed = bool(
+        {"primary_provider", "primary_model", "fallback_chain"}.intersection(data)
+    )
+    if target_active or route_fields_changed:
+        await _validate_route_targets(
+            session,
+            task=route.task,
+            org_id=route.org_id,
+            primary_provider=target_provider,
+            primary_model=target_model,
+            fallback_chain=data.get("fallback_chain", route.fallback_chain),
+        )
+    activates_route = bool(target_active and not route.is_active)
+    changes_active_primary = bool(
+        target_active and {"primary_provider", "primary_model"}.intersection(data)
+    )
+    campaign = (
+        await _prepare_embedding_route_campaign(
+            session,
+            task=route.task,
+            provider=target_provider,
+            model=target_model,
+        )
+        if activates_route or changes_active_primary
+        else None
+    )
+    for key, value in data.items():
+        setattr(route, key, value)
+    session.add(route)
+    await session.commit()
+    await session.refresh(route)
+    await _invalidate_route_cache(route)
+    await load_runtime_overrides(get_session_factory())
+    if campaign is not None:
+        await dispatch_embedding_campaign(campaign.id, background)
+    return route
+
+
+@router.delete("/models/{route_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_route(route_id: UUID, session: Session) -> None:
+    route = (
+        await session.execute(select(ModelRoute).where(ModelRoute.id == route_id))
+    ).scalar_one_or_none()
+    if route is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "路由不存在")
+    await session.delete(route)
+    await session.commit()
+    await _invalidate_route_cache(route)
+    await load_runtime_overrides(get_session_factory())
+
+
+# ---------- 外部服务配置(联网搜索 / 图片生成 / 天气) ----------
+# 模型与凭证统一经 /admin/providers 和 /admin/models 管理;这里只放非模型类
+# 外部服务的凭证与开关,.env 仅作迁移期兜底。TF 的 "ota" 属旅游业务,不在 SDK。
+
+SERVICE_CONFIG_NAMES = ("websearch", "imagegen", "weather")
+EMBEDDING_OFFLINE_RUNBOOK = "docs/operations/embedding-dimension-migration.md"
+
+
+class ServiceConfigIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payload: dict
+
+
+def _resolved_embedding_config(payload: dict | None) -> dict:
+    """A12 触点②:service-configs 的 embedding 分支(缺省回落 .env / 内置维度)。"""
+    settings = get_settings()
+    values = payload or {}
+    raw_dim = values.get("dim")
+    try:
+        dim = int(raw_dim) if raw_dim not in (None, "") else EMBEDDING_DIM
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "invalid_embedding_dimension", "message": "dim 必须为正整数"},
+        ) from exc
+    try:
+        return normalize_embedding_config(
+            {
+                "provider": values.get("provider") or settings.embedding_provider,
+                "model": values.get("model") or settings.embedding_model,
+                "dim": dim,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "invalid_embedding_config", "message": str(exc)},
+        ) from exc
+
+
+def _is_service_secret(key: str) -> bool:
+    """Any credential-shaped key is masked on read.
+
+    Matched on the ``_key`` / ``_secret`` / ``_token`` suffix rather than an
+    explicit allowlist: a new service must not leak its credential just because
+    nobody remembered to register the field name.
+    """
+    return key in {"api_key", "key", "secret", "token"} or key.endswith(
+        ("_api_key", "_key", "_secret", "_token", "_password")
+    )
+
+
+def _mask_service_secrets(payload: dict) -> dict:
+    return {
+        key: SERVICE_SECRET_MASK if _is_service_secret(key) and value else value
+        for key, value in payload.items()
+    }
+
+
+def _merge_masked_service_secrets(payload: dict, current: dict | None) -> dict:
+    """掩码原样回传 = 保留旧值(读出面拿不到明文,前端只能这么表达"不改")。"""
+    merged = dict(payload)
+    for key, value in payload.items():
+        if _is_service_secret(key) and value == SERVICE_SECRET_MASK:
+            merged[key] = (current or {}).get(key, "")
+    return merged
+
+
+def _encrypt_service_secrets(payload: dict) -> dict:
+    """落库前把密钥形字段经 SecretBox 加密(非密钥字段原样)。"""
+    box = get_secret_box()
+    return {
+        key: (
+            box.encrypt(value)
+            if _is_service_secret(key) and isinstance(value, str) and value
+            else value
+        )
+        for key, value in payload.items()
+    }
+
+
+@router.get("/service-configs")
+async def list_service_configs(session: Session) -> dict:
+    """全部外部服务配置(平台管理员;空 payload = 全走 .env)。"""
+    rows = (
+        (
+            await session.execute(
+                select(ServiceConfig).where(ServiceConfig.name.in_(SERVICE_CONFIG_NAMES))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_name = {row.name: _mask_service_secrets(row.payload) for row in rows}
+    return {name: by_name.get(name, {}) for name in SERVICE_CONFIG_NAMES}
+
+
+@router.get("/service-configs/imagegen/readiness")
+async def imagegen_readiness(session: Session) -> dict:
+    """Resolved, non-secret readiness metadata for deployment verification."""
+    row = (
+        await session.execute(select(ServiceConfig).where(ServiceConfig.name == "imagegen"))
+    ).scalar_one_or_none()
+    return imagegen_service.image_service_readiness(
+        row.payload if row is not None else None
+    ).as_dict()
+
+
+@router.put("/service-configs/{name}")
+async def put_service_config(name: str, body: ServiceConfigIn, session: Session) -> dict:
+    """整体覆盖某服务配置;键与 .env 字段对应,空串/缺失键回落 .env。"""
+    if name not in SERVICE_CONFIG_NAMES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "未知服务")
+    row = (
+        await session.execute(select(ServiceConfig).where(ServiceConfig.name == name))
+    ).scalar_one_or_none()
+    merged_payload = _merge_masked_service_secrets(
+        body.payload, row.payload if row is not None else None
+    )
+    if name == "imagegen":
+        try:
+            payload = imagegen_service.normalize_imagegen_payload(merged_payload)
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                {"code": "invalid_imagegen_config", "message": str(exc)},
+            ) from exc
+    else:
+        payload = merged_payload
+    payload = _encrypt_service_secrets(payload)
+
+    if row is None:
+        row = ServiceConfig(name=name, payload=payload)
+    else:
+        row.payload = payload
+    session.add(row)
+    await session.commit()
+    # API 进程内立即生效;其余进程(worker)靠周期刷新兜底
+    await load_runtime_overrides(get_session_factory())
+    return {"name": name, "payload": _mask_service_secrets(row.payload)}
+
+
+# ---------- 用量看板 ----------
+
+
+class UsageRow(BaseModel):
+    org_id: UUID
+    org_name: str
+    task: str
+    tokens_in: int
+    tokens_out: int
+    calls: int
+    quantity: int  # 通用计量数:存储类 = 字节,LLM 行恒 0
+
+
+@router.get("/usage", response_model=list[UsageRow])
+async def usage_overview(
+    org_session: Annotated[AsyncSession, Depends(get_org_session)],
+    days: int = 30,
+) -> list[UsageRow]:
+    """按 org×task 聚合近 N 天用量。平台管理员的 JWT org = 平台 org,
+    usage_daily 的 platform_read 策略据此放行全租户 SELECT(写入面不受影响)。"""
+    since = date.today() - timedelta(days=max(1, min(days, 365)))
+    rows = (
+        await org_session.execute(
+            select(
+                UsageDaily.org_id,
+                func.coalesce(Organization.name, "(已删除)").label("org_name"),
+                UsageDaily.task,
+                func.sum(UsageDaily.tokens_in),
+                func.sum(UsageDaily.tokens_out),
+                func.sum(UsageDaily.calls),
+                func.sum(UsageDaily.quantity),
+            )
+            .join(Organization, Organization.id == UsageDaily.org_id, isouter=True)
+            .where(UsageDaily.usage_date >= since)
+            .group_by(UsageDaily.org_id, Organization.name, UsageDaily.task)
+            .order_by(func.sum(UsageDaily.tokens_in).desc())
+        )
+    ).all()
+    return [
+        UsageRow(
+            org_id=r[0],
+            org_name=r[1],
+            task=r[2],
+            tokens_in=r[3],
+            tokens_out=r[4],
+            calls=r[5],
+            quantity=r[6],
+        )
+        for r in rows
+    ]
+
+
+# ---------- 模型计费(billing) ----------
+
+
+class PriceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(min_length=1, max_length=50)
+    model: str = Field(min_length=1, max_length=100)
+    display_name: str = Field(min_length=1, max_length=100)
+    # 单位:USD / 1M tokens
+    input_price: Decimal = Field(ge=0)
+    output_price: Decimal = Field(ge=0)
+    cache_read_price: Decimal = Field(default=Decimal(0), ge=0)
+    cache_write_price: Decimal = Field(default=Decimal(0), ge=0)
+
+
+class PriceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    input_price: Decimal | None = Field(default=None, ge=0)
+    output_price: Decimal | None = Field(default=None, ge=0)
+    cache_read_price: Decimal | None = Field(default=None, ge=0)
+    cache_write_price: Decimal | None = Field(default=None, ge=0)
+
+
+@router.get("/model-prices", response_model=list[ModelPrice])
+async def list_model_prices(session: Session) -> list[ModelPrice]:
+    return (
+        (
+            await session.execute(
+                select(ModelPrice).order_by(ModelPrice.provider, ModelPrice.model)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@router.post("/model-prices", response_model=ModelPrice, status_code=status.HTTP_201_CREATED)
+async def create_model_price(body: PriceCreate, session: Session) -> ModelPrice:
+    exists = (
+        await session.execute(
+            select(ModelPrice).where(
+                ModelPrice.provider == body.provider, ModelPrice.model == body.model
+            )
+        )
+    ).scalar_one_or_none()
+    if exists is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "该 provider+model 已有价格,请编辑现有条目"
+        )
+    price = ModelPrice(**body.model_dump())
+    session.add(price)
+    await session.commit()
+    await session.refresh(price)
+    return price
+
+
+@router.patch("/model-prices/{price_id}", response_model=ModelPrice)
+async def update_model_price(price_id: UUID, body: PriceUpdate, session: Session) -> ModelPrice:
+    price = (
+        await session.execute(select(ModelPrice).where(ModelPrice.id == price_id))
+    ).scalar_one_or_none()
+    if price is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "价格条目不存在")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(price, key, value)
+    await session.commit()
+    await session.refresh(price)
+    return price
+
+
+@router.delete("/model-prices/{price_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_model_price(price_id: UUID, session: Session) -> None:
+    price = (
+        await session.execute(select(ModelPrice).where(ModelPrice.id == price_id))
+    ).scalar_one_or_none()
+    if price is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "价格条目不存在")
+    await session.delete(price)
+    await session.commit()
+
+
+_PER_MILLION = Decimal(1_000_000)
+
+
+def _cost_of(
+    price: ModelPrice | None,
+    tokens_in: int,
+    tokens_out: int,
+    cache_read: int,
+    cache_write: int,
+) -> float | None:
+    """计费公式(与记账口径配套,tokens_in = 非缓存新输入);未定价返回 None。"""
+    if price is None:
+        return None
+    cost = (
+        tokens_in * price.input_price
+        + tokens_out * price.output_price
+        + cache_read * price.cache_read_price
+        + cache_write * price.cache_write_price
+    ) / _PER_MILLION
+    return float(cost)
+
+
+class BillingDaily(BaseModel):
+    usage_date: date
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    calls: int
+    cost: float  # 未定价组合按 0 计入,unpriced 里如实标注
+
+
+class BillingModelRow(BaseModel):
+    provider: str
+    model: str
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost: float | None  # None = 未定价
+    avg_cost: float | None  # cost / calls
+
+
+class BillingOrgRow(BaseModel):
+    org_id: UUID
+    org_name: str
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost: float
+
+
+class BillingSummary(BaseModel):
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    total_tokens: int
+    cost: float
+    # 输入侧缓存命中率 = cache_read / (cache_read + tokens_in);无输入时 None
+    cache_hit_rate: float | None
+    unpriced: list[str]  # 有用量但未定价的 "provider:model"
+
+
+class BillingOut(BaseModel):
+    summary: BillingSummary
+    daily: list[BillingDaily]
+    by_model: list[BillingModelRow]
+    by_org: list[BillingOrgRow]
+
+
+@router.get("/billing", response_model=BillingOut)
+async def billing_overview(
+    org_session: Annotated[AsyncSession, Depends(get_org_session)],
+    days: int = 30,
+) -> BillingOut:
+    """LLM 用量计费汇总:usage_daily(平台读策略)× model_prices。
+
+    只统计 LLM 行(tokens/缓存计量 > 0);internal 行 token 恒 0,天然不参与。
+    未定价组合成本按 0 计入合计,并在 summary.unpriced 里如实列出。
+    """
+    since = date.today() - timedelta(days=max(1, min(days, 365)))
+    rows = (
+        await org_session.execute(
+            select(
+                UsageDaily.usage_date,
+                UsageDaily.org_id,
+                func.coalesce(Organization.name, "(已删除)").label("org_name"),
+                UsageDaily.provider,
+                UsageDaily.model,
+                func.sum(UsageDaily.tokens_in),
+                func.sum(UsageDaily.tokens_out),
+                func.sum(UsageDaily.cache_read_tokens),
+                func.sum(UsageDaily.cache_write_tokens),
+                func.sum(UsageDaily.calls),
+            )
+            .join(Organization, Organization.id == UsageDaily.org_id, isouter=True)
+            .where(UsageDaily.usage_date >= since)
+            .group_by(
+                UsageDaily.usage_date,
+                UsageDaily.org_id,
+                Organization.name,
+                UsageDaily.provider,
+                UsageDaily.model,
+            )
+        )
+    ).all()
+
+    prices = {
+        (p.provider, p.model): p
+        for p in (await org_session.execute(select(ModelPrice))).scalars().all()
+    }
+
+    daily: dict[date, dict] = {}
+    by_model: dict[tuple[str, str], dict] = {}
+    by_org: dict[UUID, dict] = {}
+    total = {"calls": 0, "tin": 0, "tout": 0, "cr": 0, "cw": 0, "cost": 0.0}
+    unpriced: set[str] = set()
+
+    for usage_date, org_id, org_name, provider, model, tin, tout, cr, cw, calls in rows:
+        if tin + tout + cr + cw == 0:
+            continue  # 非 LLM 计量行(存储/上传)不参与 token 计费
+        cost = _cost_of(prices.get((provider, model)), tin, tout, cr, cw)
+        if cost is None:
+            unpriced.add(f"{provider}:{model}")
+        billed = cost or 0.0
+
+        d = daily.setdefault(
+            usage_date, {"tin": 0, "tout": 0, "cr": 0, "cw": 0, "calls": 0, "cost": 0.0}
+        )
+        m = by_model.setdefault(
+            (provider, model),
+            {"tin": 0, "tout": 0, "cr": 0, "cw": 0, "calls": 0, "cost": 0.0},
+        )
+        o = by_org.setdefault(
+            org_id,
+            {"name": org_name, "tin": 0, "tout": 0, "cr": 0, "cw": 0, "calls": 0, "cost": 0.0},
+        )
+        for bucket in (d, m, o, total):
+            bucket["tin"] += tin
+            bucket["tout"] += tout
+            bucket["cr"] += cr
+            bucket["cw"] += cw
+            bucket["calls"] += calls
+            bucket["cost"] += billed
+
+    input_side = total["tin"] + total["cr"]
+    return BillingOut(
+        summary=BillingSummary(
+            calls=total["calls"],
+            tokens_in=total["tin"],
+            tokens_out=total["tout"],
+            cache_read_tokens=total["cr"],
+            cache_write_tokens=total["cw"],
+            total_tokens=total["tin"] + total["tout"] + total["cr"] + total["cw"],
+            cost=round(total["cost"], 4),
+            cache_hit_rate=(total["cr"] / input_side) if input_side else None,
+            unpriced=sorted(unpriced),
+        ),
+        daily=[
+            BillingDaily(
+                usage_date=day,
+                tokens_in=v["tin"],
+                tokens_out=v["tout"],
+                cache_read_tokens=v["cr"],
+                cache_write_tokens=v["cw"],
+                calls=v["calls"],
+                cost=round(v["cost"], 4),
+            )
+            for day, v in sorted(daily.items())
+        ],
+        by_model=[
+            BillingModelRow(
+                provider=provider,
+                model=model,
+                calls=v["calls"],
+                tokens_in=v["tin"],
+                tokens_out=v["tout"],
+                cache_read_tokens=v["cr"],
+                cache_write_tokens=v["cw"],
+                cost=round(v["cost"], 4) if f"{provider}:{model}" not in unpriced else None,
+                avg_cost=(
+                    round(v["cost"] / v["calls"], 6)
+                    if v["calls"] and f"{provider}:{model}" not in unpriced
+                    else None
+                ),
+            )
+            for (provider, model), v in sorted(
+                by_model.items(), key=lambda kv: kv[1]["cost"], reverse=True
+            )
+        ],
+        by_org=[
+            BillingOrgRow(
+                org_id=org_id,
+                org_name=v["name"],
+                calls=v["calls"],
+                tokens_in=v["tin"],
+                tokens_out=v["tout"],
+                cache_read_tokens=v["cr"],
+                cache_write_tokens=v["cw"],
+                cost=round(v["cost"], 4),
+            )
+            for org_id, v in sorted(by_org.items(), key=lambda kv: kv[1]["cost"], reverse=True)
+        ],
+    )
+
+
+# ---------- LLM 请求日志 ----------
+
+
+class TraceRow(BaseModel):
+    id: UUID
+    created_at: datetime | None
+    org_name: str
+    task: str
+    provider: str
+    model: str
+    status: str
+    error: str | None
+    attempt: int
+    fallback_from: str | None
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    latency_ms: int
+    cost: float | None  # 按当前价格现算;未定价 None
+
+
+class TracePage(BaseModel):
+    items: list[TraceRow]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get("/llm-traces", response_model=TracePage)
+async def llm_trace_log(
+    org_session: Annotated[AsyncSession, Depends(get_org_session)],
+    days: int = 7,
+    page: int = 1,
+    page_size: int = 50,
+    status_filter: str | None = None,
+) -> TracePage:
+    """LLM 请求日志(平台侧跨租户,llm_traces platform_read 策略):
+    倒序分页;status_filter ∈ success/error;成本按当前价格现算(历史价不回溯)。"""
+    page = max(1, page)
+    page_size = max(1, min(page_size, 200))
+    since = datetime.now(UTC) - timedelta(days=max(1, min(days, 90)))
+
+    conditions = [LlmTrace.created_at >= since]
+    if status_filter in ("success", "error"):
+        conditions.append(LlmTrace.status == status_filter)
+
+    total = (
+        await org_session.execute(
+            select(func.count()).select_from(LlmTrace).where(*conditions)
+        )
+    ).scalar_one()
+    rows = (
+        await org_session.execute(
+            select(LlmTrace, func.coalesce(Organization.name, "(已删除)"))
+            .join(Organization, Organization.id == LlmTrace.org_id, isouter=True)
+            .where(*conditions)
+            .order_by(LlmTrace.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+
+    prices = {
+        (p.provider, p.model): p
+        for p in (await org_session.execute(select(ModelPrice))).scalars().all()
+    }
+    return TracePage(
+        items=[
+            TraceRow(
+                id=t.id,
+                created_at=t.created_at,
+                org_name=org_name,
+                task=t.task,
+                provider=t.provider,
+                model=t.model,
+                status=t.status,
+                error=t.error,
+                attempt=t.attempt,
+                fallback_from=t.fallback_from,
+                tokens_in=t.tokens_in,
+                tokens_out=t.tokens_out,
+                cache_read_tokens=t.cache_read_tokens,
+                cache_write_tokens=t.cache_write_tokens,
+                latency_ms=t.latency_ms,
+                cost=_cost_of(
+                    prices.get((t.provider, t.model)),
+                    t.tokens_in,
+                    t.tokens_out,
+                    t.cache_read_tokens,
+                    t.cache_write_tokens,
+                ),
+            )
+            for t, org_name in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )

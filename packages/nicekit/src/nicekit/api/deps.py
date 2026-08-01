@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nicekit.core.db import bind_org_context, get_session
 from nicekit.core.security import decode_access_token
 from nicekit.models.tenancy import Role
+from nicekit.tenancy.roles import write_roles
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -61,6 +62,22 @@ def require_role(*roles: Role | str):
 
     async def _checker(ctx: Annotated[OrgContext, Depends(get_org_context)]) -> OrgContext:
         if ctx.role not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
+        return ctx
+
+    return _checker
+
+
+def require_write_role():
+    """写操作守卫(A13):在**请求期**读 tenancy.roles 的写角色注册表。
+
+    与 require_role 的区别是允许集合不在 import 期定格 —— 宿主在装配期
+    ``register_write_roles("editor")`` 之后,已经定义好的 KB 写端点立刻放行,
+    不需要各处再复制一份 ``_KB_WRITERS`` 常量。
+    """
+
+    async def _checker(ctx: Annotated[OrgContext, Depends(get_org_context)]) -> OrgContext:
+        if ctx.role not in set(write_roles()):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient role")
         return ctx
 

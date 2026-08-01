@@ -128,7 +128,7 @@ async def test_classification_is_persisted_without_enqueue_or_dispatch(
     enqueue = AsyncMock()
     dispatch = AsyncMock()
     monkeypatch.setattr(kb_api, "enqueue_document_ingestion", enqueue)
-    monkeypatch.setattr(kb_api, "_dispatch_kb_ingest_run", dispatch)
+    monkeypatch.setattr(kb_api, "dispatch_kb_ingest_run", dispatch)
 
     result = await kb_api.classify_documents(
         body=kb_api.DocumentClassificationsBody(
@@ -261,7 +261,7 @@ async def test_explicit_queue_commits_before_dispatch(monkeypatch) -> None:
     enqueue = AsyncMock(return_value=(revision, run))
     dispatch = AsyncMock(side_effect=lambda *_args: events.append("dispatch"))
     monkeypatch.setattr(kb_api, "enqueue_document_ingestion", enqueue)
-    monkeypatch.setattr(kb_api, "_dispatch_kb_ingest_run", dispatch)
+    monkeypatch.setattr(kb_api, "dispatch_kb_ingest_run", dispatch)
 
     result = await kb_api.enqueue_documents(
         body=kb_api.DocumentIngestionQueueBody(items=[{"document_id": document.id}]),
@@ -294,7 +294,7 @@ async def test_queue_skips_unclassified_item_but_queues_valid_item(
     enqueue = AsyncMock(return_value=(revision, run))
     dispatch = AsyncMock()
     monkeypatch.setattr(kb_api, "enqueue_document_ingestion", enqueue)
-    monkeypatch.setattr(kb_api, "_dispatch_kb_ingest_run", dispatch)
+    monkeypatch.setattr(kb_api, "dispatch_kb_ingest_run", dispatch)
 
     result = await kb_api.enqueue_documents(
         body=kb_api.DocumentIngestionQueueBody(
@@ -330,7 +330,7 @@ async def test_repeated_queue_returns_existing_root_without_dispatch(
     enqueue = AsyncMock()
     dispatch = AsyncMock()
     monkeypatch.setattr(kb_api, "enqueue_document_ingestion", enqueue)
-    monkeypatch.setattr(kb_api, "_dispatch_kb_ingest_run", dispatch)
+    monkeypatch.setattr(kb_api, "dispatch_kb_ingest_run", dispatch)
 
     result = await kb_api.enqueue_documents(
         body=kb_api.DocumentIngestionQueueBody(items=[{"document_id": document.id}]),

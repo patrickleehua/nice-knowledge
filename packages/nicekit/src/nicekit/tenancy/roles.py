@@ -55,3 +55,42 @@ def assignable_roles() -> frozenset[str]:
 def reset_registered_roles() -> None:
     """清空宿主注册的角色(测试 / 重新装配用;不影响内置角色)。"""
     _registered.clear()
+
+
+# ---------------------------------------------------------------------------
+# 写角色注册(MIGRATION-PLAN §5.9 A13)
+# ---------------------------------------------------------------------------
+#
+# TF 在 api/v1/kb.py 与 kb_entity_types.py 各写了一份 `_KB_WRITERS`
+# (platform_admin/org_admin),宿主想让业务角色(编辑/审校…)能写知识库时
+# 无处下手。这里收敛为单一注册表:内置两个平台/租户管理员角色恒在,宿主
+# 追加的角色经 register_write_roles() 生效;守卫在**请求期**读注册表
+# (api/deps.py::require_write_role),因此装配顺序无关。
+
+_BUILTIN_WRITE: tuple[str, ...] = (PLATFORM_ADMIN, ORG_ADMIN)
+_registered_write: dict[str, None] = {}
+
+
+def register_write_roles(*names: str) -> None:
+    """注册可执行"写"操作的业务角色(幂等)。
+
+    只接受已经过 :func:`register_roles` 登记(或内置)的角色名,避免拼错角色名
+    静默放行。内置写角色重复注册是 no-op。
+    """
+    known = set(all_roles())
+    for name in names:
+        if name in _BUILTIN_WRITE:
+            continue
+        if name not in known:
+            raise ValueError(f"未注册的角色 {name!r},请先调用 register_roles()")
+        _registered_write[name] = None
+
+
+def write_roles() -> tuple[str, ...]:
+    """当前写角色集合(内置在前,宿主注册的按注册顺序在后)。"""
+    return (*_BUILTIN_WRITE, *_registered_write)
+
+
+def reset_write_roles() -> None:
+    """清空宿主注册的写角色(测试 / 重新装配用;不影响内置写角色)。"""
+    _registered_write.clear()

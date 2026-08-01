@@ -1,7 +1,8 @@
 """知识库 API。
 
-写操作要求 org_admin / platform_admin(宿主注册的业务角色可经 _KB_WRITERS
-追加);RLS 负责数据隔离(平台层条目对租户只读由 RLS 写策略强制,API 无需特判)。
+写操作要求 tenancy.roles.write_roles()(内置 org_admin / platform_admin,
+宿主经 register_write_roles() 追加业务角色);RLS 负责数据隔离(平台层条目对
+租户只读由 RLS 写策略强制,API 无需特判)。
 """
 
 import hashlib
@@ -29,7 +30,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import SQLModel
 
-from nicekit.api.deps import OrgContext, get_org_context, get_org_session, require_role
+from nicekit.api.deps import (
+    OrgContext,
+    get_org_context,
+    get_org_session,
+    require_role,
+    require_write_role,
+)
 from nicekit.core.config import get_settings
 from nicekit.domain.kb import INGEST_PROFILE_PRESETS, IngestProfile
 from nicekit.domain.kb_media import (
@@ -194,77 +201,16 @@ from nicekit.models.kb import (
 )
 from nicekit.models.llm_provider import LlmProvider
 from nicekit.models.tenancy import AuditLog, Organization, Role
+from nicekit.runtime.dispatch import dispatch_kb_ingest_run, dispatch_kb_reextract_run
 from nicekit.tenancy.usage import record_usage
 
 router = APIRouter(prefix="/kb")
 
-# 内置角色只有三个(MIGRATION-PLAN §5.2);宿主注册的业务角色可经
-# set_kb_writer_roles() 追加进写权限集合,require_role 按字符串值比较。
-_KB_WRITERS: tuple[str, ...] = (Role.PLATFORM_ADMIN, Role.ORG_ADMIN)
+# 写角色统一注册在 tenancy/roles.py(A13):内置 platform_admin/org_admin,
+# 宿主经 register_write_roles() 追加业务角色,require_write_role 请求期读取。
 _KB_SHARERS: tuple[str, ...] = (Role.PLATFORM_ADMIN, Role.ORG_ADMIN)
 _ENTITY_ALIAS_UNIQUE_CONSTRAINT = "uq_entity_alias_kb_normalized_locale"
 
-
-# ---- 任务派发(P4 接线点)---------------------------------------------------
-#
-# 统一派发器属 runtime 装配层(MIGRATION-PLAN §5.7,`runtime/dispatch.py`),
-# 本波次尚未搬入。这里保留 TF 的语义(celery 优先、失败回退 BackgroundTasks),
-# runtime.dispatch 存在时直接委派过去,不存在时走进程内 inline 回退。
-# P4 搬入 runtime/dispatch.py 后本节可整体删除,改回顶层 import。
-
-
-async def _dispatch_kb_ingest_run(
-    run_id: UUID, org_id: UUID, background: BackgroundTasks | None = None
-) -> bool:
-    """派发已持久化的 root ingest run;恢复扫描走同一入口。"""
-    try:
-        from nicekit.runtime.dispatch import dispatch_kb_ingest_run
-    except ImportError:
-        pass
-    else:
-        return await dispatch_kb_ingest_run(run_id, org_id, background)
-
-    from nicekit.core.db import get_session_factory
-    from nicekit.kb.ingestion import ingest_document
-    from nicekit.kb.search import default_embedder
-
-    if background is None:
-        return False
-    background.add_task(
-        ingest_document,
-        run_id,
-        org_id,
-        session_factory=get_session_factory(),
-        llm=get_llm_service(),
-        embedder=default_embedder(),
-    )
-    return True
-
-
-async def _dispatch_kb_reextract_run(
-    run_id: UUID, org_id: UUID, background: BackgroundTasks | None = None
-) -> bool:
-    """派发已持久化的 typed 重抽取 root run。"""
-    try:
-        from nicekit.runtime.dispatch import dispatch_kb_reextract_run
-    except ImportError:
-        pass
-    else:
-        return await dispatch_kb_reextract_run(run_id, org_id, background)
-
-    from nicekit.core.db import get_session_factory
-    from nicekit.kb.ingestion import reextract_document
-
-    if background is None:
-        return False
-    background.add_task(
-        reextract_document,
-        run_id,
-        org_id,
-        session_factory=get_session_factory(),
-        llm=get_llm_service(),
-    )
-    return True
 
 def _integrity_constraint_name(exc: IntegrityError) -> str | None:
     current: object | None = exc.orig
@@ -671,7 +617,7 @@ async def list_bases(
 @router.post("/bases", response_model=KnowledgeBase, status_code=status.HTTP_201_CREATED)
 async def create_base(
     body: KbCreateBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     ingest_profile = _validate_ingest_profile(body.ingest_profile)
@@ -694,7 +640,7 @@ async def create_base(
 async def update_base(
     kb_id: UUID,
     body: KbUpdateBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     kb = await _require_own_kb(session, ctx, kb_id)
@@ -1111,7 +1057,7 @@ async def list_snapshots(
 async def create_snapshot(
     kb_id: UUID,
     body: SnapshotBuildBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     try:
@@ -1287,7 +1233,7 @@ def _register_entity_crud(name: str, model: type[SQLModel]) -> None:
     @router.post(f"/{name}", response_model=model, status_code=status.HTTP_201_CREATED)
     async def create_item(
         body: dict,
-        ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+        ctx: Annotated[OrgContext, Depends(require_write_role())],
         session: Annotated[AsyncSession, Depends(get_org_session)],
     ):
         if not body.get("kb_id"):
@@ -1311,7 +1257,7 @@ def _register_entity_crud(name: str, model: type[SQLModel]) -> None:
     async def update_item(
         item_id: UUID,
         body: dict,
-        ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+        ctx: Annotated[OrgContext, Depends(require_write_role())],
         session: Annotated[AsyncSession, Depends(get_org_session)],
     ):
         row = await session.get(model, item_id)
@@ -1334,7 +1280,7 @@ def _register_entity_crud(name: str, model: type[SQLModel]) -> None:
     async def move_item(
         item_id: UUID,
         body: EntityMoveBody,
-        ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+        ctx: Annotated[OrgContext, Depends(require_write_role())],
         session: Annotated[AsyncSession, Depends(get_org_session)],
     ):
         row = await session.get(model, item_id)
@@ -1349,7 +1295,7 @@ def _register_entity_crud(name: str, model: type[SQLModel]) -> None:
     @router.delete(f"/{name}/{{item_id}}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_item(
         item_id: UUID,
-        ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+        ctx: Annotated[OrgContext, Depends(require_write_role())],
         session: Annotated[AsyncSession, Depends(get_org_session)],
     ):
         row = await session.get(model, item_id)
@@ -1435,7 +1381,7 @@ async def _enable_snapshot_wiki_review_write(session: AsyncSession) -> None:
 @router.post("/pages/{page_id}/draft/publish", response_model=KbPage)
 async def publish_page_draft(
     page_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     page = await _get_owned_page(session, ctx, page_id)
@@ -1454,7 +1400,7 @@ async def publish_page_draft(
 @router.post("/pages/{page_id}/draft/reject", response_model=KbPage)
 async def reject_page_draft(
     page_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     page = await _get_owned_page(session, ctx, page_id)
@@ -1530,7 +1476,7 @@ async def _resolve_doc_type(session: AsyncSession, org_id: UUID, doc_type: str) 
 async def upload_document(
     file: UploadFile,
     kb_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
     rel_path: str | None = None,
 ):
@@ -1654,7 +1600,7 @@ async def list_document_revisions(
 async def upload_document_revision(
     doc_id: UUID,
     file: UploadFile,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     doc = await session.get(SourceDocument, doc_id)
@@ -2217,7 +2163,7 @@ async def _document_root_ingest_run(
 )
 async def classify_documents(
     body: DocumentClassificationsBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ) -> DocumentClassificationsOut:
     """Persist per-source extraction types without creating ingest runs."""
@@ -2292,7 +2238,7 @@ async def classify_documents(
 async def enqueue_documents(
     body: DocumentIngestionQueueBody,
     background: BackgroundTasks,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ) -> DocumentIngestionQueueOut:
     """Explicitly enqueue classified staged sources and dispatch after commit."""
@@ -2414,7 +2360,7 @@ async def enqueue_documents(
 
     await session.commit()
     for run_id, org_id in dispatches:
-        await _dispatch_kb_ingest_run(run_id, org_id, background)
+        await dispatch_kb_ingest_run(run_id, org_id, background)
     return DocumentIngestionQueueOut(queued=queued, skipped=skipped)
 
 
@@ -2447,7 +2393,7 @@ async def reclassify_document(
     doc_id: UUID,
     body: DocumentReclassificationBody,
     background: BackgroundTasks,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ) -> DocumentReclassificationOut:
     target_doc_type = await _resolve_doc_type(
@@ -2518,7 +2464,7 @@ async def reclassify_document(
     session.add(doc)
     await session.commit()
     await session.refresh(run)
-    await _dispatch_kb_reextract_run(run.id, doc.org_id, background)
+    await dispatch_kb_reextract_run(run.id, doc.org_id, background)
     return _reclassification_out(run)
 
 
@@ -2528,7 +2474,7 @@ async def reclassify_document(
 )
 async def get_document_withdrawal_impact(
     doc_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     try:
@@ -2874,7 +2820,7 @@ async def request_document_purge(
 @router.delete("/documents/{doc_id}", status_code=status.HTTP_202_ACCEPTED)
 async def delete_document(
     doc_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
     reason: str = "document withdrawn",
 ):
@@ -2913,7 +2859,7 @@ async def delete_document(
 )
 async def get_document_operation(
     operation_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     operation = await session.scalar(
@@ -2940,7 +2886,7 @@ async def get_document_operation(
 )
 async def retry_document_operation_endpoint(
     operation_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     selected = await session.scalar(
@@ -3209,7 +3155,7 @@ async def list_canonical_entities(
 )
 async def create_canonical_entity_endpoint(
     body: CanonicalEntityCreateBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     await _require_own_kb(session, ctx, body.kb_id)
@@ -3236,7 +3182,7 @@ async def create_canonical_entity_endpoint(
 async def patch_canonical_entity(
     entity_id: UUID,
     body: CanonicalEntityPatchBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     entity = await session.scalar(
@@ -3273,7 +3219,7 @@ async def patch_canonical_entity(
 async def create_entity_alias_endpoint(
     entity_id: UUID,
     body: EntityAliasCreateBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     entity = await session.scalar(
@@ -3310,7 +3256,7 @@ async def create_entity_alias_endpoint(
 @router.delete("/entity-aliases/{alias_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_entity_alias_endpoint(
     alias_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     alias = await session.get(EntityAlias, alias_id)
@@ -3334,7 +3280,7 @@ async def delete_entity_alias_endpoint(
 async def merge_canonical_entity_endpoint(
     source_id: UUID,
     body: EntityMergeBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     source = await session.get(CanonicalEntity, source_id)
@@ -3527,7 +3473,7 @@ async def _fact_claim_outputs(session: AsyncSession, claims: list[FactClaim]) ->
 async def bind_fact_claim_entity(
     entity_id: UUID,
     claim_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     entity = await session.get(CanonicalEntity, entity_id)
@@ -3707,7 +3653,7 @@ async def _review_fact_claim(
 async def review_fact_claim(
     claim_id: UUID,
     body: FactClaimReviewBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     claim = await _review_fact_claim(session, ctx, claim_id, body)
@@ -3731,7 +3677,7 @@ class FactClaimAiReviewBody(BaseModel):
 @router.post("/fact-claims/ai-review")
 async def ai_review_fact_claims_endpoint(
     body: FactClaimAiReviewBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """AI 自动审核 suggested 事实:confirm/reject 直接落库,拿不准的留队列并附原因。"""
@@ -3748,7 +3694,7 @@ async def ai_review_fact_claims_endpoint(
 @router.post("/fact-claims/batch")
 async def batch_review_fact_claims(
     body: FactClaimBatchBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     done: list[str] = []
@@ -4693,7 +4639,7 @@ class ChunkPatchBody(BaseModel):
 async def update_chunk(
     chunk_id: UUID,
     body: ChunkPatchBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """人工修订 chunk 内容并同步重算 embedding(标题面包屑继续参与嵌入文本);
@@ -4730,7 +4676,7 @@ async def update_chunk(
 @router.delete("/chunks/{chunk_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chunk(
     chunk_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     chunk = await session.get(KbChunk, chunk_id)
@@ -4748,7 +4694,7 @@ async def delete_chunk(
 @router.post("/documents/{doc_id}/wiki/refresh")
 async def refresh_document_wiki(
     doc_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """重跑该文档的 wiki 更新(两步思维链:分析→生成→草稿落库→综述草稿)。
@@ -4771,7 +4717,7 @@ async def refresh_document_wiki(
 @router.post("/bases/{kb_id}/wiki/overview/refresh")
 async def refresh_kb_wiki_overview(
     kb_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """单独生成该库的「知识库总览」待审核草稿。"""
@@ -4947,7 +4893,7 @@ async def _retry_doc(
     revision, run = await enqueue_document_ingestion(session, doc)
     await _reset_canceled_ingest_segments(session, revision=revision, root_run=run)
     await session.commit()
-    await _dispatch_kb_ingest_run(run.id, doc.org_id, background)
+    await dispatch_kb_ingest_run(run.id, doc.org_id, background)
 
 
 async def _reset_canceled_ingest_segments(
@@ -4981,7 +4927,7 @@ class DocExpiryBody(BaseModel):
 async def update_document_expiry(
     doc_id: UUID,
     body: DocExpiryBody,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """设置/清除文档有效期(prod-readiness-4):过期后检索命中带 stale 标注,
@@ -5002,7 +4948,7 @@ async def update_document_expiry(
 async def reingest_document(
     doc_id: UUID,
     background: BackgroundTasks,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """Retry an active failed ingest or restore a withdrawn document through a new revision."""
@@ -5040,7 +4986,7 @@ async def reingest_document(
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         await session.refresh(request.document)
         if run is not None:
-            await _dispatch_kb_ingest_run(run.id, request.document.org_id, background)
+            await dispatch_kb_ingest_run(run.id, request.document.org_id, background)
         return request.document
     if lifecycle != DocumentLifecycleStatus.ACTIVE.value:
         raise HTTPException(
@@ -5059,7 +5005,7 @@ async def reingest_document(
 @router.post("/documents/{doc_id}/cancel", response_model=SourceDocument)
 async def cancel_document(
     doc_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """取消排队/解析中/已暂停的文档:排队中立即生效;解析中在分段间协作式停止
@@ -5081,7 +5027,7 @@ async def cancel_document(
 @router.post("/documents/{doc_id}/pause", response_model=SourceDocument)
 async def pause_document(
     doc_id: UUID,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """暂停解析中的文档:在阶段边界协作式停止,已完成阶段的产物全部保留。
@@ -5105,7 +5051,7 @@ async def pause_document(
 async def resume_document(
     doc_id: UUID,
     background: BackgroundTasks,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """继续已暂停的文档:重新入队,已 staged 的阶段按幂等键跳过,不重复采集。"""
@@ -5146,7 +5092,7 @@ class DocBatchBody(BaseModel):
 async def batch_documents(
     body: DocBatchBody,
     background: BackgroundTasks,
-    ctx: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    ctx: Annotated[OrgContext, Depends(require_write_role())],
     session: Annotated[AsyncSession, Depends(get_org_session)],
 ):
     """批量重试/取消/暂停/继续。逐条处理,状态不符的条目跳过并报告,不整体失败。"""
@@ -5291,7 +5237,7 @@ def _ingest_settings_payload() -> dict[str, int]:
 
 @router.get("/ingest/settings")
 async def get_ingest_settings(
-    _: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    _: Annotated[OrgContext, Depends(require_write_role())],
 ):
     return _ingest_settings_payload()
 
@@ -5299,7 +5245,7 @@ async def get_ingest_settings(
 @router.put("/ingest/settings")
 async def put_ingest_settings(
     body: IngestSettingsBody,
-    _: Annotated[OrgContext, Depends(require_role(*_KB_WRITERS))],
+    _: Annotated[OrgContext, Depends(require_write_role())],
 ):
     if not 1 <= body.max_concurrency <= 8:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "并行度范围 1-8")

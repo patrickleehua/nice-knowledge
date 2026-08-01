@@ -21,7 +21,7 @@ from nicekit.domain.kb import (
     WikiOverview,
     WikiPlannedPage,
 )
-from nicekit.kb import wiki_gen
+from nicekit.kb import ingestion as kb_ingestion
 from nicekit.kb.ingestion import _maybe_update_wiki
 from nicekit.kb.wiki_gen import (
     DEFAULT_PAGE_TYPE,
@@ -476,7 +476,7 @@ async def test_auto_wiki_disabled_skips_trigger(monkeypatch) -> None:
     async def fake_update(doc_id, org_id, *, session_factory, llm):
         called.append(doc_id)
 
-    monkeypatch.setattr(wiki_gen, "update_wiki_for_document", fake_update)
+    monkeypatch.setattr(kb_ingestion, "update_wiki_for_document", fake_update)
     await _maybe_update_wiki(
         _doc(), ORG_ID, session_factory=None, llm=None,
         profile=IngestProfile(auto_wiki=False),
@@ -492,7 +492,7 @@ async def test_auto_wiki_default_on_triggers(monkeypatch, profile) -> None:
         called.append((doc_id, org_id))
         return SimpleNamespace(created=[], updated=[], warnings=[])
 
-    monkeypatch.setattr(wiki_gen, "update_wiki_for_document", fake_update)
+    monkeypatch.setattr(kb_ingestion, "update_wiki_for_document", fake_update)
     doc = _doc()
     await _maybe_update_wiki(doc, ORG_ID, session_factory=None, llm=None, profile=profile)
     assert called == [(doc.id, ORG_ID)]
@@ -502,6 +502,6 @@ async def test_wiki_failure_does_not_raise(monkeypatch) -> None:
     async def boom(doc_id, org_id, *, session_factory, llm):
         raise RuntimeError("LLM 网关抖动")
 
-    monkeypatch.setattr(wiki_gen, "update_wiki_for_document", boom)
+    monkeypatch.setattr(kb_ingestion, "update_wiki_for_document", boom)
     # 不应上抛:摄入状态已落库,wiki 失败只打日志
     await _maybe_update_wiki(_doc(), ORG_ID, session_factory=None, llm=None, profile=None)

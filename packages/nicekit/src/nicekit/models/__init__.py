@@ -19,6 +19,7 @@ from nicekit.models import llm as llm  # noqa: F401
 from nicekit.models import llm_provider as llm_provider  # noqa: F401
 from nicekit.models import mcp as mcp  # noqa: F401
 from nicekit.models import memory as memory  # noqa: F401
+from nicekit.models import operations as operations  # noqa: F401
 from nicekit.models import service_config as service_config  # noqa: F401
 from nicekit.models import tenancy as tenancy  # noqa: F401
 

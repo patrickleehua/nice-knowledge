@@ -16,9 +16,6 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nicekit.api.deps import OrgContext, get_org_context, get_org_session, require_role
-
-# 任务派发的 P4 接线点(runtime/dispatch.py 搬入前的 shim,见 api/v1/kb.py)
-from nicekit.api.v1.kb import _dispatch_kb_ingest_run as dispatch_kb_ingest_run
 from nicekit.domain.kb_media import (
     ImageAssetIssueKind,
     ImageEnrichmentStatus,
@@ -49,6 +46,7 @@ from nicekit.kb.image_review import (
     review_image_asset,
 )
 from nicekit.models.tenancy import Role
+from nicekit.runtime.dispatch import dispatch_kb_ingest_run
 
 router = APIRouter(prefix="/kb/image-assets")
 

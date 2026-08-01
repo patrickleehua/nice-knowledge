@@ -219,8 +219,9 @@ async def purge_incidents(
 # ---------------------------------------------------------------------------
 
 #: KB 治理通知的默认收件角色。TF 用 org_admin/operator,SDK 只有三个内置角色,
-#: 宿主注册了业务角色后可调 :func:`set_kb_notify_roles` 追加。
-_notify_roles: tuple[Role, ...] = (Role.ORG_ADMIN,)
+#: 宿主注册了业务角色后可调 :func:`set_kb_notify_roles` 追加(存字符串:自定义
+#: 角色不进 Role 枚举,Role 是 StrEnum 所以两者可直接比较)。
+_notify_roles: tuple[str, ...] = (Role.ORG_ADMIN.value,)
 #: 通知里的落地链接(前端路由由宿主决定)
 _notify_link: str | None = "/org/kb"
 
@@ -228,11 +229,11 @@ _notify_link: str | None = "/org/kb"
 def set_kb_notify_roles(roles: Sequence[Role | str] | None) -> None:
     global _notify_roles
     _notify_roles = tuple(
-        role if isinstance(role, Role) else Role(str(role)) for role in (roles or ())
-    ) or (Role.ORG_ADMIN,)
+        role.value if isinstance(role, Role) else str(role) for role in (roles or ())
+    ) or (Role.ORG_ADMIN.value,)
 
 
-def kb_notify_roles() -> tuple[Role, ...]:
+def kb_notify_roles() -> tuple[str, ...]:
     return _notify_roles
 
 
@@ -254,7 +255,7 @@ async def notify_org_roles(
     body: str,
     link: str | None = None,
     email: bool = False,
-    roles: Sequence[Role] | None = None,
+    roles: Sequence[Role | str] | None = None,
 ) -> int:
     """给 org 内指定角色发站内信;通知能力不可用时降级为不通知,返回收件人数。
 

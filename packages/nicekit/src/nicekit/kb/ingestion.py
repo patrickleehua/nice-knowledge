@@ -15,7 +15,6 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import anyio
@@ -34,6 +33,7 @@ from nicekit.domain.kb import (
     IngestProfile,
 )
 from nicekit.kb import storage
+from nicekit.kb.caption import CaptionModelSelection
 from nicekit.kb.chunker import (
     ExtractionSegment,
     chunk_markdown,
@@ -61,6 +61,16 @@ from nicekit.kb.guardrails import (
     fence_untrusted_document,
     suspicious_instruction_reasons,
 )
+from nicekit.kb.image_enrichment import (
+    KbImageEnrichmentService,
+    get_kb_image_enrichment_service,
+)
+from nicekit.kb.image_ingestion import (
+    persist_image_candidates,
+    process_revision_image_enrichment,
+    revision_image_stage,
+    summarize_image_assets,
+)
 from nicekit.kb.image_refs import (
     ImageMarkdownRef,
     parsed_image_occurrences,
@@ -78,6 +88,7 @@ from nicekit.kb.ingest_runs import (
 )
 from nicekit.kb.parsers import parse_document
 from nicekit.kb.parsing import chunk_text
+from nicekit.kb.wiki_gen import WikiSnapshotManagedError, update_wiki_for_document
 from nicekit.llm.providers import ProviderError
 from nicekit.llm.service import (
     AllProvidersFailedError,
@@ -101,18 +112,6 @@ from nicekit.models.kb import (
     SnapshotFactSupport,
     SourceDocument,
 )
-
-if TYPE_CHECKING:  # pragma: no cover - 仅供类型标注
-    from nicekit.kb.image_enrichment import KbImageEnrichmentService
-
-# ---- 延迟 import 说明 ------------------------------------------------------
-# 实体/证据支线已在 P3b 搬入,import 提回模块级。下列模块属媒体与 wiki 波次,
-# 仍在**使用处**延迟 import,以便 ingestion 本身可被导入与单测:
-#   nicekit.kb.caption            CaptionModelSelection
-#   nicekit.kb.image_enrichment   KbImageEnrichmentService / get_kb_image_enrichment_service
-#   nicekit.kb.image_ingestion    persist_image_candidates / process_revision_image_enrichment /
-#                                 revision_image_stage / summarize_image_assets
-#   nicekit.kb.wiki_gen           WikiSnapshotManagedError / update_wiki_for_document
 
 logger = logging.getLogger(__name__)
 
@@ -669,8 +668,9 @@ def _schedule_throttle_retry(run_id: UUID, org_id: UUID) -> None:
     if get_settings().task_dispatch_mode != "celery":
         return
     try:
-        # 延迟 import:celery 装配属于 runtime 层(MIGRATION-PLAN §5.7,P4 阶段搬运)。
-        # 该模块尚未存在时 ImportError 与 broker 抖动同路径处理——状态已回 uploaded,
+        # 延迟 import:celery 装配属于 runtime 层,顶层引它会构成
+        # runtime → operations → kb → runtime 的导入环;broker/装配缺席时的
+        # ImportError 与 broker 抖动同路径处理——状态已回 uploaded,
         # 可靠性 sweep / 人工重试兜底,不阻塞摄入。
         from nicekit.runtime.celery_app import celery_app
 
@@ -986,18 +986,8 @@ async def ingest_document(
     session_factory: async_sessionmaker[AsyncSession],
     llm: LLMService,
     embedder: EmbeddingService | None = None,
-    image_enricher: "KbImageEnrichmentService | None" = None,
+    image_enricher: KbImageEnrichmentService | None = None,
 ) -> None:
-    # 媒体波次延迟 import(见文件头说明)
-    from nicekit.kb.caption import CaptionModelSelection
-    from nicekit.kb.image_enrichment import get_kb_image_enrichment_service
-    from nicekit.kb.image_ingestion import (
-        persist_image_candidates,
-        process_revision_image_enrichment,
-        revision_image_stage,
-        summarize_image_assets,
-    )
-
     session = org_session(session_factory, org_id)
     acquired = False
     lease_owner = f"ingest:{uuid4().hex}"
@@ -1902,9 +1892,6 @@ async def _maybe_update_wiki(
     auto_wiki = profile.auto_wiki if profile is not None else IngestProfile().auto_wiki
     if not auto_wiki:
         return
-    # wiki 波次延迟 import(见文件头说明)
-    from nicekit.kb.wiki_gen import WikiSnapshotManagedError, update_wiki_for_document
-
     try:
         result = await update_wiki_for_document(
             doc.id, org_id, session_factory=session_factory, llm=llm

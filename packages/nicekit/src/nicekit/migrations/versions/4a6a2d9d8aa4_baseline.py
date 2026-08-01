@@ -1627,11 +1627,18 @@ def upgrade() -> None:
 
     # ---- RLS(MIGRATION-PLAN §5.2)----
     # 凡带 org_id 的表一律强隔离,豁免见 _RLS_EXEMPT。
-    for table_name in sorted(
+    #
+    # 只处理**本迁移自己建出来的表**:表清单取自 models 聚合器,而聚合器会随后
+    # 续波次新增表(P4 的 operations 三表即是),历史迁移不该去动它没建过的表
+    # (否则 upgrade from base 会在 ALTER TABLE 上炸 UndefinedTable)。后续表的
+    # RLS 由各自的增量迁移用同一个 helper 施加。
+    created_tables = set(sa.inspect(op.get_bind()).get_table_names())
+    baseline_rls_tables = sorted(
         name
         for name, table in metadata.tables.items()
-        if "org_id" in table.columns and name not in _RLS_EXEMPT
-    ):
+        if "org_id" in table.columns and name not in _RLS_EXEMPT and name in created_tables
+    )
+    for table_name in baseline_rls_tables:
         op_enable_org_rls(op, table_name)
 
     # 平台 org 上下文只读旁路:出账、诊断与跨租户运行日志审计需要,写入面不变。
@@ -1653,8 +1660,8 @@ def upgrade() -> None:
         ).bindparams(id=str(platform_org))
     )
 
-    # 自检:漏开 RLS 又不在豁免清单的表要当场暴露
-    missing = set(rls_tables_check(metadata)) - _RLS_EXEMPT
+    # 自检:漏开 RLS 又不在豁免清单的表要当场暴露(只看本迁移建出来的表)
+    missing = (set(rls_tables_check(metadata)) - _RLS_EXEMPT) & created_tables
     if missing:
         raise RuntimeError(f"表带 org_id 但未开 RLS:{sorted(missing)}")
 

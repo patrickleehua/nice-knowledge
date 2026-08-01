@@ -20,7 +20,8 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["packages/nicekit"]
+members = ["packages/nicekit", "apps/demo/backend"]
 
 [tool.uv.sources]
 nicekit = { workspace = true }
+nicekit-demo-backend = { workspace = true }
