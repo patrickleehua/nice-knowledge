@@ -266,6 +266,25 @@ SDK 内部禁止 import 任何宿主/业务代码。业务定制一律走以下�
 
 依赖关系:P0 → P1 → (P2 ∥ P3) → P4 → P5 → P6。P2 与 P3 相互独立可并行。
 
+### 执行记录(实际按三波拆分并行推进)
+
+| 阶段 | commit | 状态 |
+|---|---|---|
+| P0 骨架 + core + SecretBox | `2c93a78` | ✅ |
+| P1 tenancy + llm + baseline(61 表) | `5219348` | ✅ |
+| P2a agent 基础层(loop/权限/ToolRegistry) | `571fa58` | ✅ |
+| P3a KB 模型摄入链 + baseline 接线 | `83d13dc` | ✅ |
+| P2b 17 通用工具 + MCP/skills/子agent + capabilities | `1ff2783` | ✅ |
+| P3b 实体图谱快照 + **search.py 泛化重写** | `4a03f03` | ✅ |
+| P3c 多媒体/wiki + 104 条 KB API | `c2991d1` | ✅ |
+| P2c 编排层 + prompts 模板化 + domains 收敛 | `961c8e0` | ✅ |
+| P4 装配层 + operations + demo 后端(64 表) | `6041c81` | ✅ |
+| P6 SDK 使用指南 + README + 试装演练 | `148555b` | ✅ |
+| P5 前端 demo | — | 进行中 |
+
+**已达成的验收**:后端 1860 测试全绿;迁移 upgrade/downgrade 往返幂等;demo 后端真实启动,
+登录后 10/10 端点 200,四个扩展点运行时确认生效;新项目试装演练——5 行代码装配出 182 个端点。
+
 ## 7. 工程规约
 
 - commit 消息:`<类型>:<中文描述>`(feat/fix/update/refactor/docs),每完成一个功能大点即 commit。
