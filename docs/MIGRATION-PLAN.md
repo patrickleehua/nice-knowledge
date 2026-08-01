@@ -134,8 +134,8 @@ SDK 内部禁止 import 任何宿主/业务代码。业务定制一律走以下�
 **近乎原样搬运**(约 3200 行):`loop.py`(注意 :818/:1118 的 `image_generate` 特判改为 `ToolDef.emit_start_progress` 标志位)、`context_budget.py`、`mcp_manager.py`、`skills.py`、`sub_agents.py`(:306-309 项目 ID 注入泛化为 scope 注入)、`run_inputs.py`、`user_input.py`、`terminal.py`、`tool_trace.py`(噪音工具名单可配)、`runtime_tools.py`(NOT_RUNTIME_GRANTABLE 改 ToolDef 标志位)、`session_goal.py`(GOAL_CONTINUATION_TEXT 文案中性化)、`icron.py`(notify 走 Notifier 协议、NOTIFY_LINK 可配)、`permissions/` 七文件(见下)、`domain/agent_permission.py`、`domain/agent_plan.py`。
 
 **tools.py 拆分**(TF :1-3837):
-- 进 SDK 的 19 个通用工具:`kb_list/kb_search/kb_image_inspect/retrieval_get`、`web_search/web_fetch/image_generate`、`skills_list/skill_view`、`ask_user`、`plan_update/update_goal/cronjob`、`memory_search/memory_write/memory_forget`、`weather_get`(描述文案去旅游化)。注:`kb_retrieve`/`business_media_select` 是业务工具,不搬。
-- `ToolRegistry` 类替代模块级 `TOOLS`(:224);`TOOL_META`(:227-291)并入 ToolDef;`BUILTIN_TOOL_PERMISSIONS`(:315-904)只保留 19 个通用工具的声明;`validate_tool_permission_spec`(:907)保留。
+- 进 SDK 的 17 个通用工具(TF 的 63 个内置工具中,通用部分。最初调研称 19 个,其中 `kb_retrieve`(返回业务分桶结果)与 `business_media_select`(业务选图桥接)经业务耦合复核判定为业务工具,故为 17):`kb_list/kb_search/kb_image_inspect/retrieval_get`、`web_search/web_fetch/image_generate`、`skills_list/skill_view`、`ask_user`、`plan_update/update_goal/cronjob`、`memory_search/memory_write/memory_forget`、`weather_get`(描述文案去旅游化)。注:`kb_retrieve`/`business_media_select` 是业务工具,不搬。
+- `ToolRegistry` 类替代模块级 `TOOLS`(:224);`TOOL_META`(:227-291)并入 ToolDef;`BUILTIN_TOOL_PERMISSIONS`(:315-904)只保留这 17 个通用工具的声明;`validate_tool_permission_spec`(:907)保留。
 - `ToolContext`(:144-163):`chat_session` 保留;`pipeline_run_ids` 泛化为 `cancellable_resources: set` + 终结回调;角色检查(`PRICE_ROLES`/`_require_pricer` :119/:2284)删除,提供 `RoleChecker` 注入点。
 
 **permissions/ 改造**:
@@ -151,7 +151,7 @@ SDK 内部禁止 import 任何宿主/业务代码。业务定制一律走以下�
 - `agent_role_generic.md`:领域无关兜底角色。
 - `memory_extraction.md`:模板化,示例换通用场景(去掉签证/票价/大巴)。
 - `compression.py:43-50` SUMMARY_SYSTEM_PROMPT 移入 prompt 资源并中性化;`SUMMARY_TASK`/`MEMORY_TASK`(compression.py:41、memory.py:91)默认 `agent.default`,可配。
-- `seed.py`:WORKBENCH_SYSTEM_PROMPT(:81-147)等旅游 SOP 不搬;SDK 提供一个中性默认卡(通用助手,启用全部 19 通用工具),demo 的 seed 在 apps/demo。
+- `seed.py`:WORKBENCH_SYSTEM_PROMPT(:81-147)等旅游 SOP 不搬;SDK 提供一个中性默认卡(通用助手,启用全部 17 个通用工具),demo 的 seed 在 apps/demo。
 
 **service.py 改造**:
 - `stage.update` 事件(:1362-1378 按工具名前缀推导旅游阶段)删除;改为 `ToolDef.stage` 自声明 + 宿主事件钩子(前端对应删 stage 分支)。
