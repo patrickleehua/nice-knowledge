@@ -86,3 +86,42 @@ def test_provider_model_endpoint_returns_decrypted_key(monkeypatch) -> None:
 
     assert endpoint is not None
     assert endpoint.api_key == "sk-embed-secret"
+
+
+def test_empty_provider_table_falls_back_to_env_builtins(monkeypatch) -> None:
+    """全新部署:表已加载但为空 → 内置双线仍要能用 .env 凭证起来。
+
+    回归用例。曾经的判据是 `rows is None`(表未加载才回落),于是刚迁移完、
+    管理员还没配 provider 的库返回 `[]`,凭证解析结果是空 dict,首次对话
+    直接 AllProvidersFailedError,而且失败在选实例阶段、llm_traces 里连
+    一条记录都没有,极难排查。
+    """
+    monkeypatch.setattr(
+        service_module,
+        "get_settings",
+        lambda: _settings(openai_api_key="sk-env", openai_base_url="https://env.test/v1"),
+    )
+    monkeypatch.setattr(service_module, "get_secret_box", lambda: BOX)
+    monkeypatch.setattr(service_module, "runtime_providers", lambda: [])
+
+    svc = get_llm_service()
+
+    assert "openai" in svc._providers, "空表时内置 openai 应回落 .env"
+    assert svc._providers["openai"]._client.api_key == "sk-env"
+
+
+def test_env_fallback_does_not_resurrect_disabled_table_row(monkeypatch) -> None:
+    """管理员显式禁用的实例不该被 .env 复活——那是他的决定,不是缺配置。"""
+    row = _provider_row("openai", "sk-db")
+    row["enabled"] = False
+    monkeypatch.setattr(
+        service_module,
+        "get_settings",
+        lambda: _settings(openai_api_key="sk-env", openai_base_url="https://env.test/v1"),
+    )
+    monkeypatch.setattr(service_module, "get_secret_box", lambda: BOX)
+    monkeypatch.setattr(service_module, "runtime_providers", lambda: [row])
+
+    svc = get_llm_service()
+
+    assert "openai" not in svc._providers

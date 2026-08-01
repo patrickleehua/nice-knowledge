@@ -288,6 +288,15 @@ def upgrade():
 | `NICEKIT_SECRET_KEY` | 密钥加密的 master key。**不配则密钥明文落库** |
 | `DATABASE_URL` / `MIGRATION_DATABASE_URL` | 应用账号 / 迁移账号,分离 |
 
+**接入 OpenAI 兼容网关**:`OPENAI_API_KEY` + `OPENAI_BASE_URL` 即可(`llm_providers`
+表为空时内置实例自动用这两项;管理端配了表行则以表为准)。若网关不接受 Responses
+的 `max_output_tokens`(症状:上游回 400 `upstream_error`),把该实例名加进
+`LLM_OPENAI_OMIT_MAX_OUTPUT_TOKENS=["openai"]`——这是按实例生效的兼容开关,
+不影响同协议的其他网关。
+
+排查顺序:`/api/v1/ready` 看依赖 → `llm_traces` 表看每跳错误(含上游诊断码)→
+服务端日志看 `上游拒绝请求` 的 WARNING(含被脱敏前的 upstream 原文)。
+
 ---
 
 ## 7. 安全须知

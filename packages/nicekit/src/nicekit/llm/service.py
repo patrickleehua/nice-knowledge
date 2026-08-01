@@ -629,7 +629,8 @@ def get_llm_service() -> LLMService:
     提供商实例来自 llm_providers 表(runtime_config 进程缓存,任意多个、
     双协议混用,路由降级链按实例名引用);内置 openai/anthropic 两行凭证
     为空时回落 .env,自定义实例凭证为空视为未配置跳过。表未加载(旧库
-    未迁移/启动早期)时回落 .env 内置双线。落库 api_key 经 SecretBox 解密。
+    未迁移/启动早期)或表里没有某个内置实例(全新部署,管理员尚未配置)时,
+    该实例回落 .env 凭证。落库 api_key 经 SecretBox 解密。
 
     冷却/限流状态注入模块级共享容器:get_llm_service() 每回合新建实例,
     这两份状态必须进程级共享才有意义(TF 原注释的"勿回退"裁决)。
@@ -660,6 +661,17 @@ def get_llm_service() -> LLMService:
         providers[row["name"]] = build_protocol_provider(
             row["protocol"], api_key, base_url, instance=row["name"]
         )
+    # 表里压根没有的内置实例,用 .env 兜底。全新部署必经此路:迁移把表建出来
+    # 是空的、管理员还没配 provider,但 .env 里已经有 key —— 没有这段兜底,
+    # 首次对话会以"全部 provider 失败"收场,且 llm_traces 里连一条记录都没有
+    # (失败发生在选实例阶段,还没走到调用),排查成本极高。
+    # 判据用"表里是否出现过这一行"而不是"是否可用":管理员显式禁用或清空密钥
+    # 的实例不该被 .env 复活,那是他的决定。
+    configured = {row["name"] for row in rows}
+    for name, (protocol, api_key, base_url) in env_creds.items():
+        if name in configured or name in providers or not api_key:
+            continue
+        providers[name] = build_protocol_provider(protocol, api_key, base_url, instance=name)
     return LLMService(
         providers,
         org_semaphores=_shared_org_semaphores,
