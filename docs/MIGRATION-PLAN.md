@@ -246,6 +246,10 @@ SDK 内部禁止 import 任何宿主/业务代码。业务定制一律走以下�
 | A7 | `snapshot.py::_snapshot_media()` 是可选加载器,`snapshot_media.py` 搬入后自动注册为必需 builder(`required_manifest()` 届时从 graph/retrieval/sql/wiki 变为含 media);`review_settlement.py` 对 `image_ingestion` 同理。新仓库无存量快照,无需兼容处理。 | P3c |
 | A8 | **lifecycle 契约已变更**:预检 payload 删 `project_ids`/`project_references`/`retrieval_snapshot_ids`/`route_asset_ids`,新增 `external_reference_count`/`counts.external_references`;`archive_knowledge_base` 参数 `acknowledge_project_unlink` → `acknowledge_external_unlink`;blocker 码 `current_project_references` → `external_scope_references`(公开码 `EXTERNAL_SCOPE_REFERENCE`),`historical_retrieval_references` 删除。API 与前端按新契约实现。 | P3c/P4/P5 |
 | A9 | 待补测试(源文件内已留标记):websearch 工具门控、runtime_tools 工具快照、icron/session_goal API 层、sub_agents 专员 seed、compression 的 `rows_to_history`;approval reviewer 的评测集需自备中性语料。 | P2c/P4 |
+| A11 | `api/v1/kb.py` 与 `kb_media.py` 里的 `_dispatch_kb_ingest_run`/`_dispatch_kb_reextract_run` 是 shim:优先委派 `nicekit.runtime.dispatch.*`,ImportError 时回退 inline BackgroundTasks。P4 搬入 dispatch 后改回顶层 import 并删 shim。 | P4 |
+| A12 | admin.py 的两处 KB 触点须接上:①`_prepare_embedding_route_campaign()`(TF admin.py:599-640,`kb.embedding` 路由换模型时自动建重嵌 campaign);②`_resolved_embedding_config()`(TF :2423,service-configs 的 embedding 分支)。另 `SERVICE_CONFIG_NAMES` 删 `"ota"`。 | P4 |
+| A13 | `_KB_WRITERS`(kb.py 与 kb_entity_types.py 各一份 `platform_admin/org_admin`)需统一注册入口,宿主才能加业务写角色;建议收进 `tenancy.roles` 或 settings。同理 `ports.set_kb_notify_roles()` 宿主注册后需调用。 | P4 |
+| A14 | `kb/ingestion.py` 文件头列出的 caption/image_enrichment/image_ingestion/wiki_gen 延迟 import 现已全部就位,可提回模块级(需同步改这几处测试的 monkeypatch 目标)。 | P4(可选清理) |
 | A10 | 测试写法纪律:替换可选依赖模块一律 `monkeypatch.setattr(包对象, "模块名", 替身)`,**不要** `monkeypatch.setitem(sys.modules, ...)`——`from pkg import mod` 优先取包属性,真实模块被别的用例 import 过后 sys.modules 替身会被绕开(已踩坑一次)。 | 全部 |
 
 ## 6. 阶段计划与验收
