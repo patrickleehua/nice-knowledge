@@ -1,0 +1,208 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), var(--font-noto-sans-sc), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-teal: var(--teal);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* TravelFlow AI 视觉规范(docs/TravelFlow AI B端工作台视觉规范预览图)— Light */
+  --background: #F6F7FA;
+  --foreground: #1A1F2C;
+  --card: #FFFFFF;
+  --card-foreground: #1A1F2C;
+  --popover: #FFFFFF;
+  --popover-foreground: #1A1F2C;
+  --primary: #1A4D8F;            /* 主色 深海蓝 */
+  --primary-foreground: #FFFFFF;
+  --secondary: #EEF2F7;
+  --secondary-foreground: #1A1F2C;
+  --muted: #EEF2F7;
+  --muted-foreground: #64748B;   /* 次要文字 */
+  --accent: #E8F0FA;             /* 交互悬浮底色(主色 8%) */
+  --accent-foreground: #1A4D8F;
+  --destructive: #D32F2F;        /* 错误红 */
+  --success: #1E8E5A;            /* 成功绿 */
+  --warning: #E6A700;            /* 警告黄 */
+  --teal: #26A69A;               /* 辅色 青绿 */
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #1A4D8F;
+  --chart-1: #1A4D8F;
+  --chart-2: #26A69A;
+  --chart-3: #E6A700;
+  --chart-4: #1E8E5A;
+  --chart-5: #64748B;
+  --radius: 0.625rem;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #1A1F2C;
+  --sidebar-primary: #1A4D8F;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #E8F0FA;
+  --sidebar-accent-foreground: #1A4D8F;
+  --sidebar-border: #E2E8F0;
+  --sidebar-ring: #1A4D8F;
+}
+
+.dark {
+  /* TravelFlow AI 视觉规范 — Dark */
+  --background: #0F141A;
+  --foreground: #E6EDF3;
+  --card: #141A22;
+  --card-foreground: #E6EDF3;
+  --popover: #141A22;
+  --popover-foreground: #E6EDF3;
+  --primary: #2F6BFF;            /* 主色 深海蓝(暗色态提亮) */
+  --primary-foreground: #FFFFFF;
+  --secondary: #1A2332;
+  --secondary-foreground: #E6EDF3;
+  --muted: #1A2332;
+  --muted-foreground: #8A94A6;   /* 次要文字 */
+  --accent: #16233A;
+  --accent-foreground: #7FA8E8;
+  --destructive: #FF4D4F;
+  --success: #2ECC71;
+  --warning: #FFB028;
+  --teal: #2BC4B1;
+  --border: #1A2332;
+  --input: #1A2332;
+  --ring: #2F6BFF;
+  --chart-1: #2F6BFF;
+  --chart-2: #2BC4B1;
+  --chart-3: #FFB028;
+  --chart-4: #2ECC71;
+  --chart-5: #8A94A6;
+  --sidebar: #141A22;
+  --sidebar-foreground: #E6EDF3;
+  --sidebar-primary: #2F6BFF;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #16233A;
+  --sidebar-accent-foreground: #7FA8E8;
+  --sidebar-border: #1A2332;
+  --sidebar-ring: #2F6BFF;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* 发布页构建中的不定进度：只表达任务仍在运行，不虚构具体完成百分比 */
+.release-build-progress {
+  animation: release-build-progress 1.6s ease-in-out infinite;
+}
+
+@keyframes release-build-progress {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(310%);
+  }
+}
+
+/* agent 活动状态行:Claude Code 式文字流光(等待模型/执行工具时的低调提示) */
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text 2.4s linear infinite;
+}
+
+@keyframes shimmer-text {
+  from {
+    background-position: 200% center;
+  }
+  to {
+    background-position: -200% center;
+  }
+}
+
+/* 正文 [n] 角标跳转后,对应来源卡片闪一下,帮用户定位 */
+.cite-flash {
+  animation: cite-flash 1.4s ease-out;
+}
+
+@keyframes cite-flash {
+  from {
+    background-color: color-mix(in oklab, var(--primary) 14%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+  to {
+    background-color: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .release-build-progress {
+    width: 100%;
+    animation: none;
+    transform: none;
+  }
+
+  .cite-flash {
+    animation-duration: 0.01ms;
+  }
+}
