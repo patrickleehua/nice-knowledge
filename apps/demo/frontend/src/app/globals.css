@@ -196,40 +196,90 @@
 }
 
 .nk-session-sidebar {
-  border-right: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-right: 1px solid color-mix(in oklab, white 76%, var(--border));
   background:
     linear-gradient(
-      180deg,
-      color-mix(in oklab, white 56%, transparent),
-      color-mix(in oklab, var(--background) 72%, transparent)
+      145deg,
+      color-mix(in oklab, white 96%, transparent),
+      color-mix(in oklab, white 72%, transparent) 48%,
+      color-mix(in oklab, white 86%, transparent)
     ),
-    radial-gradient(
-      24rem circle at 82% 10%,
-      color-mix(in oklab, var(--teal) 12%, transparent),
-      transparent 62%
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, white 68%, transparent),
+      color-mix(in oklab, var(--teal) 5%, transparent) 42%,
+      color-mix(in oklab, var(--primary) 5%, transparent)
     );
   box-shadow:
-    inset -1px 0 0 color-mix(in oklab, white 38%, transparent),
-    12px 0 34px color-mix(in oklab, var(--foreground) 5%, transparent);
-  backdrop-filter: blur(24px) saturate(145%);
+    inset 1px 0 0 color-mix(in oklab, white 92%, transparent),
+    inset -1px 0 0 color-mix(in oklab, var(--foreground) 6%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 96%, transparent),
+    16px 0 42px color-mix(in oklab, var(--foreground) 7%, transparent);
+  backdrop-filter: blur(34px) saturate(175%) brightness(1.04);
+}
+
+.nk-session-sidebar::before {
+  pointer-events: none;
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(
+      112deg,
+      transparent 0%,
+      color-mix(in oklab, white 54%, transparent) 22%,
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, white 72%, transparent),
+      transparent 34%,
+      color-mix(in oklab, var(--primary) 4%, transparent)
+    );
+  opacity: 0.82;
 }
 
 .dark .nk-session-sidebar {
-  border-right-color: color-mix(in oklab, var(--border) 72%, transparent);
+  border-right-color: color-mix(in oklab, white 14%, transparent);
   background:
     linear-gradient(
-      180deg,
-      color-mix(in oklab, var(--card) 76%, transparent),
-      color-mix(in oklab, var(--background) 72%, transparent)
+      145deg,
+      color-mix(in oklab, white 18%, transparent),
+      color-mix(in oklab, white 8%, transparent) 48%,
+      color-mix(in oklab, white 12%, transparent)
     ),
-    radial-gradient(
-      24rem circle at 78% 8%,
-      color-mix(in oklab, var(--teal) 10%, transparent),
-      transparent 62%
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, white 10%, transparent),
+      color-mix(in oklab, var(--teal) 8%, transparent) 42%,
+      color-mix(in oklab, var(--primary) 8%, transparent)
     );
   box-shadow:
-    inset -1px 0 0 color-mix(in oklab, white 7%, transparent),
-    12px 0 34px color-mix(in oklab, black 16%, transparent);
+    inset 1px 0 0 color-mix(in oklab, white 13%, transparent),
+    inset -1px 0 0 color-mix(in oklab, black 38%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 15%, transparent),
+    16px 0 42px color-mix(in oklab, black 24%, transparent);
+}
+
+.dark .nk-session-sidebar::before {
+  background:
+    linear-gradient(
+      112deg,
+      transparent 0%,
+      color-mix(in oklab, white 14%, transparent) 22%,
+      transparent 42%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, white 9%, transparent),
+      transparent 34%,
+      color-mix(in oklab, var(--primary) 7%, transparent)
+    );
+  opacity: 0.78;
 }
 
 .nk-brand-glass-mark {

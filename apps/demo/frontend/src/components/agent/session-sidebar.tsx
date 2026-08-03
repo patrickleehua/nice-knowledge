@@ -76,8 +76,8 @@ function SessionRows({
             className={cn(
               "group flex items-center rounded-xl transition-colors",
               active
-                ? "bg-white/82 text-foreground shadow-sm ring-1 ring-black/[0.045] dark:bg-white/[0.085] dark:ring-white/[0.055]"
-                : "text-muted-foreground hover:bg-white/45 hover:text-foreground dark:hover:bg-white/[0.055]",
+                ? "bg-white/88 text-foreground shadow-[0_7px_22px_rgb(15_23_42/0.08),inset_0_1px_0_rgb(255_255_255/0.8)] ring-1 ring-black/[0.04] dark:bg-white/[0.12] dark:shadow-[0_7px_22px_rgb(0_0_0/0.24),inset_0_1px_0_rgb(255_255_255/0.12)] dark:ring-white/[0.07]"
+                : "text-muted-foreground hover:bg-white/58 hover:text-foreground hover:shadow-[inset_0_1px_0_rgb(255_255_255/0.72)] dark:hover:bg-white/[0.07]",
             )}
           >
             <button
@@ -192,7 +192,7 @@ export function SessionSidebar({
               aria-label={`查看${scopeLabel}`}
               className={cn(
                 activeSessionId &&
-                  "bg-white/70 shadow-xs ring-1 ring-black/[0.045] dark:bg-white/[0.08] dark:ring-white/[0.055]",
+                  "bg-white/82 shadow-xs ring-1 ring-black/[0.04] dark:bg-white/[0.1] dark:ring-white/[0.065]",
               )}
             >
               <History className="size-4" />
@@ -204,7 +204,7 @@ export function SessionSidebar({
               <Button
                 type="button"
                 variant="ghost"
-                className="min-w-0 flex-1 justify-start bg-white/36 hover:bg-white/66 dark:bg-white/[0.035] dark:hover:bg-white/[0.075]"
+                className="min-w-0 flex-1 justify-start bg-white/52 shadow-[inset_0_1px_0_rgb(255_255_255/0.75)] ring-1 ring-black/[0.035] hover:bg-white/82 dark:bg-white/[0.055] dark:ring-white/[0.055] dark:hover:bg-white/[0.09]"
                 onClick={onCreate}
                 disabled={disabled}
               >
