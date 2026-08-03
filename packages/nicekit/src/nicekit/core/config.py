@@ -266,19 +266,20 @@ class KbSettings(_DomainSettings):
     kb_vector_max_distance: float = 0.62
     # 口径澄清(2026-07-23):search.py manifest 里的 enable_gate_min_gain_points:
     # 5.0 只是文档性声明(参与 config_fingerprint,不可改动),代码中没有自动
-    # gain 门控。原计划的门 = 本开关默认 False + 评测脚本 --compare-graph 实测
-    # 增益 >= 5pt 后由人工改为 True。
+    # gain 门控。真正的门 = 本开关默认 False + 评测实测增益 >= 5pt 后人工改 True。
     #
-    # 2026-08-03 转为默认开启。两点依据:
-    # 1) 该门槛此前**不可执行**——`--compare-graph` 评测脚本从未实现,全仓库只有
-    #    上面这行注释提到它,开关因此被无限期锁在 False;
-    # 2) 更关键的是,在此之前图谱这一路是**空转**的:唯一的结果恢复路径依赖检索
-    #    卡片,而普通文档只产出 entity_mention 与关系事实(按设计不建卡),于是
-    #    强制开启与关闭结果完全一致。也就是说旧的 False 并非"评测未达标",而是
-    #    "达标与否无从谈起"。断链修复(证据切片回落 + 种子析取匹配)后已真库验证
-    #    产生增益:跨文档邻居切片可被带回,且关联路径进入答问上下文。
-    # 建立多跳评测集后仍应补测 Recall@K / nDCG@K,用数据复核这个默认值。
-    kb_graph_search_enabled: bool = True
+    # 2026-08-03 记:此前这道门是**空的**——图谱一路整体空转(唯一的结果恢复路径
+    # 依赖检索卡片,而普通文档只产出 entity_mention 与关系事实、按设计不建卡),
+    # 强制开启与关闭结果完全一致,增益无从谈起;配套的评测脚本也从未实现。
+    # 断链修复后两者都已补齐(见 nicekit.kb.graph_eval 与 scripts/compare_graph.py),
+    # 门槛从"不可执行"变为"可执行",因此保持默认 False 并交由实测决定。
+    #
+    # 开启前请按 query 类型**分层**评测,不要只看总均值:公开评测(GraphRAG-Bench
+    # arXiv:2506.05690、RAG vs. GraphRAG arXiv:2502.11371)一致显示图谱增益高度
+    # 依赖问题类型——多跳/关系推理上可达 +10pt 以上,而简单单跳事实检索上图谱常
+    # 因引入冗余与噪声而**低于**纯向量+稀疏。混合 query 集的总均值会同时掩盖这
+    # 两侧。长期更优解是按 query 意图路由,而非全局一刀切。
+    kb_graph_search_enabled: bool = False
     kb_graph_max_hops: int = Field(default=2, ge=1, le=2)
 
     # KB 健康巡检(监控双轨之二:系统内主动告警):间隔秒,0 = 关;
