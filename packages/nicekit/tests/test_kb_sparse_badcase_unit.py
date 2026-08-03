@@ -8,8 +8,9 @@ AND + 非锚点组按 quorum 0.6 松绑 OR + Python 侧原文子串复核。
 基线**而非业务语料)与期望词组结构固化为回归基线:锚点选取、名词复合词备选、
 同义词扩展与 quorum 计算任一退化都会在此失败。
 
-噪声词表与同义词表在 SDK 里是空默认 + 注册项(MIGRATION-PLAN B16),因此本
-文件用 fixture 显式注册一份语料相关的词表——这同时也是该扩展点的回归。
+SDK 只内置一份通用停用词默认集(疑问词/功能词),语料相关的词表与同义词表仍是
+注册项(MIGRATION-PLAN B16),因此本文件用 fixture 显式注册一份语料相关的词表
+——这同时也是该扩展点(注册即整体覆盖)的回归。
 """
 
 import math
@@ -18,6 +19,7 @@ import pytest
 
 from nicekit.kb.search import (
     _SPARSE_FALLBACK_QUORUM,
+    DEFAULT_SPARSE_FALLBACK_NOISE,
     _controlled_sparse_groups,
     _sparse_group_required,
     _SparseLexeme,
@@ -39,10 +41,13 @@ def _registered_sparse_vocabulary():
     set_sparse_fallback_synonyms(None)
 
 
-def test_sparse_vocabulary_defaults_are_empty() -> None:
-    """默认不带任何语料词表:注册前噪声词照常进词组、同义词不扩展。"""
+def test_sparse_vocabulary_defaults_are_sdk_stopwords_only() -> None:
+    """默认只含 SDK 通用停用词:语料相关词(需要/买票)照常进词组、同义词不扩展。"""
     set_sparse_fallback_noise(None)
     set_sparse_fallback_synonyms(None)
+    # SDK 默认覆盖疑问词/功能词,但绝不碰承载检索意图的实词
+    assert {"什么", "干嘛", "为什么", "the", "what"} <= DEFAULT_SPARSE_FALLBACK_NOISE
+    assert not {"需要", "买票", "时候", "最好"} & DEFAULT_SPARSE_FALLBACK_NOISE
     groups = _controlled_sparse_groups(
         [_SparseLexeme(alias="v", value="需要"), _SparseLexeme(alias="v", value="买票")]
     )

@@ -81,14 +81,18 @@ def test_search_execution_manifest_uses_live_search_constants() -> None:
             "selection_order": "length_desc_then_lexical",
             "drop_single_character": True,
             "drop_unmapped_tokens": True,
-            "noise": [],
-            "min_terms": 2,
+            "noise": sorted(search_module.DEFAULT_SPARSE_FALLBACK_NOISE),
+            "noise_source": "sdk_default_stopwords",
+            "min_terms": 1,
             "max_terms": 8,
             "synonyms": {},
             "noun_compound": "exact_lexeme_or_parser_components",
             "fallback_boolean": "required_anchors_and_then_optional_groups_or",
             "anchor_min_length": 3,
-            "anchor_alias": "n",
+            "anchor_aliases": ["n"],
+            "ascii_anchor_aliases": ["e"],
+            "ascii_anchor_min_length": 3,
+            "ascii_anchor_rule": "identifier_shape_camel_or_acronym_or_separator_or_alnum",
             "quorum": 0.6,
             "quorum_verification": "normalized_substring_on_chunk_text",
             "fetch_multiplier": 3,
@@ -425,6 +429,12 @@ def _search_candidate(
 
 
 def _patch_structured_only(monkeypatch, candidates: list[_Candidate]) -> None:
+    """只留结构化一路出候选;其余通道置空,便于单独断言融合与排序。
+
+    图谱一路默认开启(kb_graph_search_enabled),而这些用例传的是假 session,
+    真去查图投影会直接 AttributeError。这里一并置空,要测图谱的用例自行覆盖
+    ``graph_recall_candidates`` 或显式传 ``graph_enabled``。
+    """
     from nicekit.kb import search as module
 
     async def structured(*_args, **_kwargs):
@@ -433,21 +443,25 @@ def _patch_structured_only(monkeypatch, candidates: list[_Candidate]) -> None:
     async def sparse(*_args, **_kwargs):
         return []
 
+    async def graph(*_args, **_kwargs):
+        return []
+
     async def citations(_session, hits):
         return hits
 
     monkeypatch.setattr(module, "_structured_candidates", structured)
     monkeypatch.setattr(module, "_sparse_chunk_hits", sparse)
+    monkeypatch.setattr(module, "graph_recall_candidates", graph)
     monkeypatch.setattr(module, "_attach_citations", citations)
 
 
-async def test_graph_channel_is_not_called_when_default_is_disabled(monkeypatch) -> None:
+async def test_graph_channel_is_not_called_when_explicitly_disabled(monkeypatch) -> None:
     from nicekit.kb import search as module
 
     _patch_structured_only(monkeypatch, [_search_candidate()])
 
     async def unexpected_graph(*_args, **_kwargs):
-        raise AssertionError("disabled graph channel must not query the graph")
+        raise AssertionError("graph_enabled=False must not query the graph")
 
     monkeypatch.setattr(module, "graph_recall_candidates", unexpected_graph)
     hits = await search_kb(
@@ -620,6 +634,9 @@ async def test_card_and_structured_candidate_cast_one_key_into_global_rrf(monkey
     async def sparse(*_args, **_kwargs):
         return [(card, 0.4)]
 
+    async def no_graph(*_args, **_kwargs):
+        return []
+
     async def no_expiry(*_args, **_kwargs):
         return set()
 
@@ -636,6 +653,8 @@ async def test_card_and_structured_candidate_cast_one_key_into_global_rrf(monkey
 
     monkeypatch.setattr(module, "_structured_candidates", structured)
     monkeypatch.setattr(module, "_sparse_chunk_hits", sparse)
+    # 图谱一路默认开启,而这里传的是假 session:置空以聚焦卡片/结构化的键合并
+    monkeypatch.setattr(module, "graph_recall_candidates", no_graph)
     monkeypatch.setattr(module, "_expired_doc_ids", no_expiry)
     monkeypatch.setattr(module, "_restore_card_hits", already_restored)
     monkeypatch.setattr(module, "_attach_citations", citations)
@@ -1060,12 +1079,22 @@ def test_controlled_sparse_groups_drop_noise_compounds_and_bound_synonyms(
         ((("旺季",),), False, False),
         ((("适合",),), False, False),
     ]
+    # 噪声词滤净后只剩单个实词:仍要构造出一个词组(等价于单关键词检索),
+    # 否则"专名 + 一串疑问词"这类问句会整条回退通道放弃 → 零召回。
+    assert _controlled_sparse_groups(
+        [
+            _SparseLexeme("n", "巴黎"),
+            _SparseLexeme("v", "需要"),
+            _SparseLexeme("n", "最好"),
+        ]
+    ) == (_SparseFallbackGroup(alternatives=(("巴黎",),)),)
+    # 全部是噪声词/单字词元:没有任何检索意图,如实返回空,不做全库扫描
     assert (
         _controlled_sparse_groups(
             [
-                _SparseLexeme("n", "巴黎"),
                 _SparseLexeme("v", "需要"),
                 _SparseLexeme("n", "最好"),
+                _SparseLexeme("v", "去"),
             ]
         )
         == ()

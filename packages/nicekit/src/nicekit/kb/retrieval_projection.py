@@ -28,6 +28,7 @@ from nicekit.kb.projections import (
     ProjectionPayloadError,
     _effective_payload,
     card_source_ref,
+    dedupe_wiki_claims_by_title,
     load_custom_entity_types,
     projection_row_id,
 )
@@ -69,6 +70,15 @@ _CHUNK_FIELDS = frozenset(
 )
 # 非实体类型的建卡谓词(实体类型 key 在构建时由 KbEntityType 注册表动态叠加)
 _ENTITY_CARD_PREDICATES = frozenset({"wiki_page"})
+#: wiki 卡片的 kind 与谓词**不同名**:卡片落 "page",对齐 KbPage 与 search.PAGE_KIND。
+#: 这处改名是检索侧一切"按 kind 反查实体行"的前提,任何消费方都不得假设
+#: ``kind == predicate``(图谱召回曾因此把 wiki 卡片 100% 静默丢弃)。
+PAGE_CARD_KIND = "page"
+
+
+def card_kind_for_predicate(predicate: str) -> str:
+    """建卡谓词 → 卡片 kind:``wiki_page`` 落 ``page``,注册实体类型保持原样。"""
+    return PAGE_CARD_KIND if predicate == "wiki_page" else predicate
 # 未注册类型的兜底卡片字段(领域无关的通用字段名);已注册类型一律走
 # entity_types.render_entity_card,不经过这里。
 _ENTITY_CARD_FIELDS = (
@@ -1133,9 +1143,18 @@ class RetrievalProjectionBuilder:
                 .scalars()
                 .all()
             )
+            # wiki 卡片必须与 KbPage 投影用同一把去重键(同 title 只留最新一条),
+            # 否则同名 claim 各建一张卡,而 KbPage 只留一行,多出来的卡片在检索
+            # 恢复时反查不到实体行,只能被丢弃——白占嵌入成本与候选位。
+            wiki_keep = {claim.id for claim in dedupe_wiki_claims_by_title(claims)}
+            claims = [
+                claim
+                for claim in claims
+                if claim.predicate != "wiki_page" or claim.id in wiki_keep
+            ]
             entity_card_refs: set[str] = set()
             for claim in claims:
-                card_kind = "page" if claim.predicate == "wiki_page" else claim.predicate
+                card_kind = card_kind_for_predicate(claim.predicate)
                 entity_id = projection_row_id(
                     context.snapshot_id, claim.predicate, claim.id
                 )

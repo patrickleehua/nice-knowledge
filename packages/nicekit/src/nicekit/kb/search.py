@@ -58,7 +58,12 @@ from nicekit.kb.embedding import (
 )
 from nicekit.kb.entity_lookup import EntityLookupError, build_entity_filters
 from nicekit.kb.entity_types import FILTERABLE_TYPES, get_entity_type
-from nicekit.kb.graph_search import graph_recall_candidates
+from nicekit.kb.graph_search import (
+    CARD_RESTORE,
+    CHUNK_RESTORE,
+    GraphRecallCandidate,
+    graph_recall_candidates,
+)
 from nicekit.kb.metrics import (
     KB_SEARCH_DENSE_DEGRADED,
     KB_SEARCH_EMPTY,
@@ -94,12 +99,14 @@ from nicekit.models.kb import (
     EvidenceSpan,
     FactClaim,
     FactReviewStatus,
+    GraphEdge,
     KbChunk,
     KbChunkEmbedding,
     KbEntity,
     KbEntityType,
     KbImageAsset,
     KbPage,
+    KbSnapshotEntityNode,
     KnowledgeBase,
     KnowledgeSnapshot,
     RevisionStatus,
@@ -110,24 +117,78 @@ from nicekit.models.kb import (
 logger = logging.getLogger(__name__)
 
 _RRF_K = 60  # structured、sparse、dense、graph 四路统一融合常数。
-_SPARSE_FALLBACK_MIN_TERMS = 2
+# 一个专名 + 一串疑问词("modelMemory 是干嘛的")是最常见的问句形态,过滤完噪声后
+# 往往只剩单个实词;门槛设为 2 会让回退通道整体放弃,是零召回 bad case 的根因。
+# 单组回退等价于一次单关键词检索(SQL 侧 OR + Python 侧 quorum ceil(1*0.6)=1 复核),
+# 召回面不会比 primary 更宽,因此下探到 1 是安全的。
+_SPARSE_FALLBACK_MIN_TERMS = 1
 _SPARSE_FALLBACK_MAX_TERMS = 8
 # 锚点=长名词(通常是地名/专名),SQL 与 Python 双侧都必须命中;非锚点词组按 quorum 松绑,
 # 避免自然问句里任一弱词缺失就整句零召回(R4 验收 bad case 的根因)。
 _SPARSE_ANCHOR_MIN_LENGTH = 3
+#: zhparser 的名词类 alias(``ts_token_type('zhparser')`` 只有单字母词性标记)。
+_SPARSE_ANCHOR_ALIASES: frozenset[str] = frozenset({"n"})
+#: zhparser 把**所有** ASCII/拉丁词元(纯英文、驼峰、下划线、带数字)统一归到
+#: alias ``e``(表里写的是"感叹词",实为非中文 token 的兜底类型),因此英文标识符
+#: 永远拿不到 ``n``——只按 alias 判锚点会让 ``modelMemory`` 这类词形同虚设。
+_SPARSE_ASCII_ALIASES: frozenset[str] = frozenset({"e"})
+#: ASCII 锚点最短长度:把 ``a``/``b``/``v2`` 这类单字母与超短噪声挡在锚点之外。
+_SPARSE_ASCII_ANCHOR_MIN_LENGTH = 3
 _SPARSE_FALLBACK_QUORUM = 0.6
 _SPARSE_FALLBACK_FETCH_MULTIPLIER = 3
 _MUST_INCLUDE_MAX_TERMS = 5
-# 稀疏回退的停用词与同义扩展是**语料相关**的,SDK 只给空默认,宿主按自己的
-# 语料注册(MIGRATION-PLAN B15/B16);注册值进 search_execution_manifest 存证。
-_SPARSE_FALLBACK_NOISE: frozenset[str] = frozenset()
+#: 标识符形态:驼峰/分隔符/字母数字混排;普通英文单词(purpose、describe)不在其列,
+#: 因此不会被误升为 required 锚点而把整句 AND 死。
+_SPARSE_ASCII_SEPARATORS = "_-."
+#: SDK 内置的保守停用词:纯功能词/疑问词/"介绍一下"类元请求动词。
+#: 这些词不承载检索意图,却会挤占 quorum 分母(乃至被误判为锚点),把
+#: "modelMemory 是干嘛的"这种问句拖成零召回。语料相关的业务停用词仍由宿主
+#: 用 :func:`set_sparse_fallback_noise` 覆盖(MIGRATION-PLAN B15/B16)。
+DEFAULT_SPARSE_FALLBACK_NOISE: frozenset[str] = frozenset(
+    {
+        # 中文语气词/助词/代词
+        "是", "的", "了", "着", "过", "吗", "呢", "嘛", "吧", "啊", "呀", "么",
+        "这个", "那个", "这些", "那些", "我们", "你们", "他们", "它们",
+        # 中文疑问词
+        "什么", "是什么", "干嘛", "干什么", "为什么", "为何", "怎么", "怎样",
+        "怎么样", "如何", "哪些", "哪个", "哪里", "多少", "几个", "是否",
+        "有没有", "能不能", "可不可以", "请问",
+        # 中文元请求动词/连接词
+        "介绍", "简介", "说明", "解释", "描述", "用来", "用于", "一下", "一些",
+        "以及", "或者", "还是", "但是", "因为", "所以", "如果", "就是", "关于",
+        "对于",
+        # 英文冠词/介词/连词/助动词
+        "a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "at", "by",
+        "as", "with", "from", "about", "into", "than", "then", "is", "are", "am",
+        "was", "were", "be", "been", "being", "do", "does", "did", "done",
+        "have", "has", "had", "can", "could", "should", "would", "will", "shall",
+        "may", "might", "must",
+        # 英文疑问词/指代词
+        "what", "why", "how", "which", "who", "whom", "whose", "when", "where",
+        "this", "that", "these", "those", "there", "here", "it", "its",
+        # 英文元请求动词
+        "please", "tell", "explain", "describe", "introduce", "introduction",
+        "overview", "summary", "summarize", "mean", "means", "meaning",
+        "purpose", "used", "using", "use",
+    }
+)
+#: 生效中的停用词(初值=SDK 默认,宿主注册后**整体覆盖**);进 manifest 存证。
+_SPARSE_FALLBACK_NOISE: frozenset[str] = DEFAULT_SPARSE_FALLBACK_NOISE
 _SPARSE_FALLBACK_SYNONYMS: dict[str, tuple[str, ...]] = {}
 
 
 def set_sparse_fallback_noise(terms: Iterable[str] | None) -> None:
-    """注册稀疏回退的噪声词(不参与词组构造);None/空 = 不过滤。"""
+    """注册稀疏回退的噪声词(不参与词组构造)。
+
+    ``None`` = 恢复 SDK 默认停用词集(:data:`DEFAULT_SPARSE_FALLBACK_NOISE`);
+    传入可迭代对象则**整体覆盖**默认集(传空可迭代对象即彻底不过滤),
+    宿主若只想在默认集上追加,自行 ``DEFAULT_SPARSE_FALLBACK_NOISE | {...}``。
+    """
     global _SPARSE_FALLBACK_NOISE
-    _SPARSE_FALLBACK_NOISE = frozenset(str(term) for term in (terms or ()))
+    if terms is None:
+        _SPARSE_FALLBACK_NOISE = DEFAULT_SPARSE_FALLBACK_NOISE
+        return
+    _SPARSE_FALLBACK_NOISE = frozenset(str(term) for term in terms)
 
 
 def set_sparse_fallback_synonyms(
@@ -253,6 +314,10 @@ class _SparseFallbackGroup:
 class _SparseLexeme:
     alias: str
     value: str
+    #: ``ts_debug`` 的原始 token。词元(``value``)已被词典小写化,驼峰信息只在
+    #: token 里保得住,锚点判定要靠它区分 ``modelMemory`` 与普通英文单词。
+    #: 缺省空串 = 未知,退回按 ``value`` 判形态(中文场景两者本就一致)。
+    token: str = ""
 
 
 CandidateKey = tuple[str, UUID]
@@ -321,6 +386,110 @@ def _effective_chunk_filter():
 
 def _stale_flag(is_stale: bool) -> dict:
     return {"stale": True} if is_stale else {}
+
+
+def _plain_chunk_hit(org_id: UUID, chunk: KbChunk, *, stale: bool) -> SearchHit:
+    """非卡片 chunk 的统一 SearchHit 形态。
+
+    sparse/dense 直接命中与图谱证据回落共用同一构造,两条通道因此产出同形的
+    候选键 ``("chunk", chunk.id)``,同一 chunk 被多路命中时在 RRF 里合并成
+    一条(而不是重复成两条结果)。
+    """
+    meta = chunk.meta or {}
+    return SearchHit(
+        kind="chunk",
+        layer=_layer(org_id, chunk.org_id),
+        kb_id=str(chunk.kb_id),
+        source=chunk.source_ref or f"kb_chunks/{chunk.id}",
+        confidence=0.0,
+        data={
+            "id": str(chunk.id),
+            "content": chunk.content,
+            "source_doc_id": (str(chunk.source_doc_id) if chunk.source_doc_id else None),
+            "content_kind": chunk.content_kind,
+            "image_asset_id": (str(chunk.image_asset_id) if chunk.image_asset_id else None),
+            "revision_id": (str(chunk.revision_id) if chunk.revision_id else None),
+            "snapshot_id": (str(chunk.snapshot_id) if chunk.snapshot_id else None),
+            "heading_path": chunk.heading_path,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "page": chunk.page,
+            "cell_ref": (
+                meta.get("cell_ref") if isinstance(meta.get("cell_ref"), str) else None
+            ),
+            _CITATION_REFS_KEY: meta.get("citation_refs"),
+            "sibling_count": 0,
+            **_stale_flag(stale),
+        },
+    )
+
+
+async def _graph_path_labels(
+    session: AsyncSession, rows: list[GraphRecallCandidate]
+) -> dict[int, list[str]]:
+    """从边链反推路径上的实体名,供答问层把关联渲染成"A 位于 B"。
+
+    只处理带 ``anchor_entity_id`` 的证据回落候选:卡片模式的 ``entity_id`` 是投影
+    行标识而非实体标识,反推会张冠李戴,交由上层降级成谓词链。返回值按候选对象
+    ``id()`` 索引,避免同一 chunk 被多条路径命中时互相覆盖。
+    """
+    anchored = [row for row in rows if row.anchor_entity_id is not None and row.edge_ids]
+    if not anchored:
+        return {}
+    edge_ids = {edge_id for row in anchored for edge_id in row.edge_ids}
+    edges = {
+        edge.id: edge
+        for edge in (
+            await session.execute(select(GraphEdge).where(GraphEdge.id.in_(list(edge_ids))))
+        )
+        .scalars()
+        .all()
+    }
+    entity_ids = {row.anchor_entity_id for row in anchored} | {
+        endpoint
+        for edge in edges.values()
+        for endpoint in (edge.src_entity_id, edge.dst_entity_id)
+    }
+    names: dict[UUID, str] = {}
+    for node in (
+        (
+            await session.execute(
+                select(KbSnapshotEntityNode).where(
+                    KbSnapshotEntityNode.entity_id.in_(list(entity_ids))
+                )
+            )
+        )
+        .scalars()
+        .all()
+    ):
+        names.setdefault(node.entity_id, node.display_name)
+
+    labels_by_row: dict[int, list[str]] = {}
+    for row in anchored:
+        current = row.anchor_entity_id
+        chain = [current]
+        # edge_ids 按扩展顺序追加,从锚点(终点)反向逐跳还原到种子
+        for edge_id in reversed(row.edge_ids):
+            edge = edges.get(edge_id)
+            if edge is None:
+                chain = []
+                break
+            if edge.dst_entity_id == current:
+                previous = edge.src_entity_id
+            elif edge.src_entity_id == current:
+                previous = edge.dst_entity_id
+            else:
+                chain = []  # 边与当前节点不相接,链已失真,整条放弃
+                break
+            chain.append(previous)
+            current = previous
+        if not chain or len(chain) != len(row.predicates) + 1:
+            continue
+        chain.reverse()
+        resolved = [names.get(entity_id) for entity_id in chain]
+        if all(resolved):
+            labels_by_row[id(row)] = [str(name) for name in resolved]
+    return labels_by_row
 
 
 # ---- 实体卡片还原:卡片 chunk 命中 → 实体 SearchHit -------------------------
@@ -557,6 +726,11 @@ def search_execution_manifest(*, top_k: int) -> dict[str, Any]:
             "drop_single_character": True,
             "drop_unmapped_tokens": True,
             "noise": sorted(_SPARSE_FALLBACK_NOISE),
+            "noise_source": (
+                "sdk_default_stopwords"
+                if _SPARSE_FALLBACK_NOISE == DEFAULT_SPARSE_FALLBACK_NOISE
+                else "host_registered"
+            ),
             "min_terms": _SPARSE_FALLBACK_MIN_TERMS,
             "max_terms": _SPARSE_FALLBACK_MAX_TERMS,
             "synonyms": {
@@ -566,7 +740,10 @@ def search_execution_manifest(*, top_k: int) -> dict[str, Any]:
             "noun_compound": "exact_lexeme_or_parser_components",
             "fallback_boolean": "required_anchors_and_then_optional_groups_or",
             "anchor_min_length": _SPARSE_ANCHOR_MIN_LENGTH,
-            "anchor_alias": "n",
+            "anchor_aliases": sorted(_SPARSE_ANCHOR_ALIASES),
+            "ascii_anchor_aliases": sorted(_SPARSE_ASCII_ALIASES),
+            "ascii_anchor_min_length": _SPARSE_ASCII_ANCHOR_MIN_LENGTH,
+            "ascii_anchor_rule": "identifier_shape_camel_or_acronym_or_separator_or_alnum",
             "quorum": _SPARSE_FALLBACK_QUORUM,
             "quorum_verification": "normalized_substring_on_chunk_text",
             "fetch_multiplier": _SPARSE_FALLBACK_FETCH_MULTIPLIER,
@@ -682,13 +859,47 @@ def _has_search_terms(query: str) -> bool:
     return any(char.isalnum() for char in query)
 
 
-def _sparse_group_required(term: str, aliases: set[str]) -> bool:
-    """Anchor rule: long nouns (usually proper names) must match; the rest stay optional."""
-    return (
-        len(term) >= _SPARSE_ANCHOR_MIN_LENGTH
-        and "n" in aliases
-        and term not in _SPARSE_FALLBACK_SYNONYMS
+def _is_ascii_identifier(token: str) -> bool:
+    """标识符形态判定:驼峰 / 含分隔符 / 字母数字混排 / 全大写缩写。
+
+    普通英文单词(``purpose``/``describe``/``memory``)一律不算——它们够长却不专指,
+    升成 required 锚点会把整句 AND 死,反而制造新的零召回。
+    """
+    if not any(char.isalpha() for char in token):
+        return False  # 纯数字/纯符号词元不做锚点
+    has_lower = any(char.islower() for char in token)
+    if has_lower and any(char.isupper() for char in token[1:]):
+        return True  # modelMemory / ModelMemory
+    if not has_lower and token.isupper():
+        return True  # API / GPT:用户显式大写即专指信号
+    if any(char in _SPARSE_ASCII_SEPARATORS for char in token):
+        return True  # model_memory / model-memory
+    return any(char.isdigit() for char in token)  # model2 / gpt4
+
+
+def _sparse_term_is_nominal(term: str, aliases: set[str]) -> bool:
+    """名词性词元:中文看 zhparser 词性,ASCII 词元按形态认定。
+
+    zhparser 把所有拉丁 token 归到 alias ``e``,英文标识符永远拿不到 ``n``,
+    所以此处对 ASCII 词元放行,再由 :func:`_sparse_group_required` 收紧到标识符形态。
+    """
+    return bool(aliases & _SPARSE_ANCHOR_ALIASES) or (
+        term.isascii() and bool(aliases & _SPARSE_ASCII_ALIASES)
     )
+
+
+def _sparse_group_required(term: str, aliases: set[str], token: str = "") -> bool:
+    """Anchor rule: long nouns (usually proper names) must match; the rest stay optional.
+
+    ASCII 分支额外要求"标识符形态"(见 :func:`_is_ascii_identifier`),据此让
+    ``modelMemory``/``model_memory`` 这类驼峰、下划线标识符能成为 required 锚点,
+    而 ``purpose``/``describe`` 之类的普通英文长词继续走 quorum 松绑。
+    """
+    if term in _SPARSE_FALLBACK_SYNONYMS or not _sparse_term_is_nominal(term, aliases):
+        return False
+    if term.isascii():
+        return len(term) >= _SPARSE_ASCII_ANCHOR_MIN_LENGTH and _is_ascii_identifier(token or term)
+    return len(term) >= _SPARSE_ANCHOR_MIN_LENGTH
 
 
 def _controlled_sparse_groups(
@@ -696,11 +907,15 @@ def _controlled_sparse_groups(
 ) -> tuple[_SparseFallbackGroup, ...]:
     """Keep noun compounds exact while bounding their parser-derived alternatives."""
     aliases_by_value: dict[str, set[str]] = {}
+    tokens_by_value: dict[str, str] = {}
     for lexeme in lexemes:
         value = lexeme.value.strip()
         if len(value) <= 1 or value in _SPARSE_FALLBACK_NOISE:
             continue
         aliases_by_value.setdefault(value, set()).add(lexeme.alias)
+        # 同一词元可能来自多个 token,取首个非空原文即可(大小写形态一致性足够)。
+        if lexeme.token and value not in tokens_by_value:
+            tokens_by_value[value] = lexeme.token
 
     retained = set(
         sorted(aliases_by_value, key=lambda term: (-len(term), term))[:_SPARSE_FALLBACK_MAX_TERMS]
@@ -710,7 +925,9 @@ def _controlled_sparse_groups(
 
     groups: list[_SparseFallbackGroup] = []
     for compound in sorted(retained, key=lambda term: (-len(term), term)):
-        if compound not in retained or "n" not in aliases_by_value[compound]:
+        if compound not in retained or not _sparse_term_is_nominal(
+            compound, aliases_by_value[compound]
+        ):
             continue
         components = tuple(
             sorted(
@@ -725,7 +942,9 @@ def _controlled_sparse_groups(
         groups.append(
             _SparseFallbackGroup(
                 alternatives=((compound,), component_alternative),
-                required=_sparse_group_required(compound, aliases_by_value[compound]),
+                required=_sparse_group_required(
+                    compound, aliases_by_value[compound], tokens_by_value.get(compound, "")
+                ),
             )
         )
         retained.difference_update({compound, *components})
@@ -737,7 +956,9 @@ def _controlled_sparse_groups(
         groups.append(
             _SparseFallbackGroup(
                 alternatives=alternatives,
-                required=_sparse_group_required(term, aliases_by_value[term]),
+                required=_sparse_group_required(
+                    term, aliases_by_value[term], tokens_by_value.get(term, "")
+                ),
             )
         )
     return tuple(groups) if len(groups) >= _SPARSE_FALLBACK_MIN_TERMS else ()
@@ -753,7 +974,10 @@ def _sparse_lexemes_statement(query: str) -> Select:
         "dictionary",
         "lexemes",
     )
-    return select(parsed.c.alias, parsed.c.lexemes).where(func.cardinality(parsed.c.lexemes) > 0)
+    # token 与 lexemes 一并取回:词元被词典小写化后驼峰形态只剩 token 能证明。
+    return select(parsed.c.alias, parsed.c.token, parsed.c.lexemes).where(
+        func.cardinality(parsed.c.lexemes) > 0
+    )
 
 
 def _ranked_sparse_statement(
@@ -801,7 +1025,9 @@ def _fallback_sparse_chunk_statement(
 ) -> Select:
     _validate_top_k(top_k)
     if len(groups) < _SPARSE_FALLBACK_MIN_TERMS:
-        raise ValueError("sparse fallback requires at least two term groups")
+        raise ValueError(
+            f"sparse fallback requires at least {_SPARSE_FALLBACK_MIN_TERMS} term group(s)"
+        )
 
     group_queries = []
     for group_index, group in enumerate(groups):
@@ -948,8 +1174,8 @@ async def _sparse_chunk_hits(
 
     parsed_rows = (await session.execute(_sparse_lexemes_statement(query))).all()
     lexemes = [
-        _SparseLexeme(alias=str(alias), value=str(value))
-        for alias, values in parsed_rows
+        _SparseLexeme(alias=str(alias), value=str(value), token=str(token or ""))
+        for alias, token, values in parsed_rows
         for value in (values or ())
     ]
     groups = _controlled_sparse_groups(lexemes)
@@ -2268,45 +2494,72 @@ async def search_kb(
             as_of=as_of,
         )
         if graph_rows:
-            graph_by_key = {
-                (row.kind, row.entity_id): row for row in graph_rows
-            }
-            restored_graph_hits = await _restore_card_hits(
-                session,
-                org_id,
-                [
-                    (row.chunk, row.score, row.kind, row.entity_id)
-                    for row in graph_rows
-                ],
-                max(row.score for row in graph_rows),
+            # 两条恢复路径:注册实体/wiki 走卡片还原,自动抽取的实体(entity_mention
+            # 与关系事实无卡片)回落到承载其证据的原始 chunk。
+            card_rows = [row for row in graph_rows if row.restore_mode == CARD_RESTORE]
+            chunk_rows = [row for row in graph_rows if row.restore_mode == CHUNK_RESTORE]
+            restored_graph: list[tuple[CandidateKey, SearchHit, Any]] = []
+
+            if card_rows:
+                graph_by_key = {(row.kind, row.entity_id): row for row in card_rows}
+                for hit in await _restore_card_hits(
+                    session,
+                    org_id,
+                    [(row.chunk, row.score, row.kind, row.entity_id) for row in card_rows],
+                    max(row.score for row in card_rows),
+                ):
+                    key = (hit.kind, UUID(str(hit.data["id"])))
+                    graph_row = graph_by_key.get(key)
+                    if graph_row is not None:
+                        restored_graph.append((key, hit, graph_row))
+
+            if chunk_rows:
+                graph_expired = await _expired_doc_ids(
+                    session, {row.chunk.source_doc_id for row in chunk_rows}
+                )
+                for row in chunk_rows:
+                    # 键与 sparse/dense 的普通 chunk 同形,同一 chunk 多路命中即合并
+                    restored_graph.append(
+                        (
+                            ("chunk", row.chunk.id),
+                            _plain_chunk_hit(
+                                org_id,
+                                row.chunk,
+                                stale=row.chunk.source_doc_id in graph_expired,
+                            ),
+                            row,
+                        )
+                    )
+
+            path_labels = await _graph_path_labels(
+                session, [row for _key, _hit, row in restored_graph]
             )
-            for hit in restored_graph_hits:
-                key = (hit.kind, UUID(str(hit.data["id"])))
-                graph_row = graph_by_key.get(key)
-                if graph_row is None:
-                    continue
+            for key, hit, graph_row in restored_graph:
                 graph_ranking.append(key)
+                labels = path_labels.get(id(graph_row))
+                graph_meta = {
+                    "graph_hops": graph_row.hops,
+                    "graph_predicates": list(graph_row.predicates),
+                    "graph_edge_ids": [str(edge_id) for edge_id in graph_row.edge_ids],
+                    **({"graph_path_labels": labels} if labels else {}),
+                }
                 existing = registry.get(key)
                 if existing is None:
                     registry[key] = _Candidate(
                         key=key,
-                        hit=replace(
-                            hit,
-                            data={
-                                **hit.data,
-                                "via": "graph",
-                                "graph_hops": graph_row.hops,
-                                "graph_predicates": list(graph_row.predicates),
-                                "graph_edge_ids": [
-                                    str(edge_id) for edge_id in graph_row.edge_ids
-                                ],
-                            },
-                        ),
+                        hit=replace(hit, data={**hit.data, "via": "graph", **graph_meta}),
                         native_scores={"graph": graph_row.score},
                     )
-                else:
-                    existing.native_scores["graph"] = max(
-                        existing.native_scores.get("graph", 0.0), graph_row.score
+                    continue
+                existing.native_scores["graph"] = max(
+                    existing.native_scores.get("graph", 0.0), graph_row.score
+                )
+                # 同一 chunk 被多路命中时 via 保留首次来源(图谱不是它的发现者),
+                # 但关联信息必须补上:跨文档串联的价值恰恰体现在这类交叉命中上,
+                # 丢了它答问层就拿不到"知识关联"上下文。
+                if "graph_predicates" not in existing.hit.data:
+                    existing.hit = replace(
+                        existing.hit, data={**existing.hit.data, **graph_meta}
                     )
             graph_ranking = list(dict.fromkeys(graph_ranking))
     sparse_rows = await _sparse_chunk_hits(session, query, top_k=channel_limit, kb_ids=kb_ids)
@@ -2434,37 +2687,8 @@ async def search_kb(
             key,
             _Candidate(
                 key=key,
-                hit=SearchHit(
-                    kind="chunk",
-                    layer=_layer(org_id, chunk.org_id),
-                    kb_id=str(chunk.kb_id),
-                    source=chunk.source_ref or f"kb_chunks/{chunk.id}",
-                    confidence=0.0,
-                    data={
-                        "id": str(chunk.id),
-                        "content": chunk.content,
-                        "source_doc_id": (
-                            str(chunk.source_doc_id) if chunk.source_doc_id else None
-                        ),
-                        "content_kind": chunk.content_kind,
-                        "image_asset_id": (
-                            str(chunk.image_asset_id) if chunk.image_asset_id else None
-                        ),
-                        "revision_id": (str(chunk.revision_id) if chunk.revision_id else None),
-                        "snapshot_id": (str(chunk.snapshot_id) if chunk.snapshot_id else None),
-                        "heading_path": chunk.heading_path,
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "page": chunk.page,
-                        "cell_ref": (
-                            (chunk.meta or {}).get("cell_ref")
-                            if isinstance((chunk.meta or {}).get("cell_ref"), str)
-                            else None
-                        ),
-                        _CITATION_REFS_KEY: ((chunk.meta or {}).get("citation_refs")),
-                        "sibling_count": 0,
-                        **_stale_flag(chunk.source_doc_id in expired_chunks),
-                    },
+                hit=_plain_chunk_hit(
+                    org_id, chunk, stale=chunk.source_doc_id in expired_chunks
                 ),
                 native_scores={},
             ),

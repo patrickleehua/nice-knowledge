@@ -466,6 +466,8 @@ async def test_structured_hit_and_card_hit_collapse_onto_one_rrf_key(
 
     monkeypatch.setattr(search_module, "_structured_candidates", structured)
     monkeypatch.setattr(search_module, "_sparse_chunk_hits", no_sparse)
+    # 图谱一路默认开启,而这里传的是假 session:置空以聚焦结构化候选的融合
+    monkeypatch.setattr(search_module, "graph_recall_candidates", no_sparse)
     monkeypatch.setattr(search_module, "_attach_citations", citations)
 
     [hit] = await search_kb(
@@ -488,6 +490,7 @@ async def test_all_channels_empty_returns_empty_without_fabricating(
 
     monkeypatch.setattr(search_module, "_structured_candidates", nothing)
     monkeypatch.setattr(search_module, "_sparse_chunk_hits", nothing)
+    monkeypatch.setattr(search_module, "graph_recall_candidates", nothing)
 
     async def boom(*_args, **_kwargs):
         raise AssertionError("空结果不应触发引用装配")
