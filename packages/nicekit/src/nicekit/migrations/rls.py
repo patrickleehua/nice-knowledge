@@ -69,3 +69,36 @@ def rls_tables_check(metadata) -> list[str]:
         for table in metadata.tables.values()
         if "org_id" in table.columns and table.name not in _rls_enabled_tables
     )
+
+
+def shared_knowledge_read_sql(table_name: str, platform_org_id: UUID | str) -> str:
+    """已发布知识的三层只读旁路 SQL(本 org / 平台 org / 被显式分享)。
+
+    与 ``org_isolation`` 是 **permissive 叠加**(PostgreSQL 同命令的多条
+    permissive 策略取 OR):SELECT 时两条并集 → 三层可见;INSERT/UPDATE/DELETE
+    仍只受 ``org_isolation`` 约束 → 写入面一点没放宽。这样不必动既有策略。
+
+    分享分支查 ``kb_shares``,而 **RLS 策略里的子查询同样受被查表自己的 RLS
+    约束**。``kb_shares`` 原本只有 owner 可见,grantee 查出来恒为空、整条分享
+    链路静默失效(实测踩过)。所以调用方必须先给 ``kb_shares`` 加一条
+    ``grantee_read`` 的 SELECT 策略,让被授权方读得到分享关系。
+    """
+    org = UUID(str(platform_org_id))
+    return f"""
+        CREATE POLICY shared_knowledge_read ON {table_name} FOR SELECT
+        USING (
+            org_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+            OR org_id = '{org}'::uuid
+            OR EXISTS (
+                SELECT 1 FROM kb_shares s
+                 WHERE s.kb_id = {table_name}.kb_id
+                   AND s.grantee_org_id
+                       = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+            )
+        )
+    """
+
+
+def op_shared_knowledge_read(op, table_name: str, platform_org_id: UUID | str) -> None:
+    """给一张带 ``kb_id`` 的已发布知识表加三层只读旁路。"""
+    op.execute(shared_knowledge_read_sql(table_name, platform_org_id))
