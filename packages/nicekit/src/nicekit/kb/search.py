@@ -745,6 +745,7 @@ def search_execution_manifest(*, top_k: int) -> dict[str, Any]:
             "ascii_anchor_min_length": _SPARSE_ASCII_ANCHOR_MIN_LENGTH,
             "ascii_anchor_rule": "identifier_shape_camel_or_acronym_or_separator_or_alnum",
             "quorum": _SPARSE_FALLBACK_QUORUM,
+            "quorum_with_anchor": "at_most_optional_count_minus_one",
             "quorum_verification": "normalized_substring_on_chunk_text",
             "fetch_multiplier": _SPARSE_FALLBACK_FETCH_MULTIPLIER,
             "merge": "primary_first_dedupe_chunk_id_then_top_k",
@@ -1017,6 +1018,21 @@ def _sparse_chunk_statement(
     )
 
 
+def _fallback_optional_quorum(required_count: int, optional_count: int) -> int:
+    """非锚点组的最低命中数;SQL 侧粗筛与 Python 侧复核**必须**共用这一个口径。
+
+    ``ceil(n*0.6)`` 在 n=1、2 时恰好等于 n,quorum 完全失去松绑作用、退化成 AND。
+    锚点已在原文词面上被强制命中、足以保证相关性,可选词就该真的可选:允许漏掉
+    一个。("WebSearch 什么时候用" 曾因正文没有"时候"二字而整条零召回——SQL 侧
+    的 ``锚点 AND (可选)`` 在单个可选组时就把候选行全滤光了,Python 侧再宽也无用。)
+    没有锚点时不放宽:那种情况下全靠这些词共同兜住相关性。
+    """
+    if not optional_count:
+        return 0
+    need = math.ceil(optional_count * _SPARSE_FALLBACK_QUORUM)
+    return min(need, optional_count - 1) if required_count else need
+
+
 def _fallback_sparse_chunk_statement(
     groups: tuple[_SparseFallbackGroup, ...],
     *,
@@ -1081,7 +1097,10 @@ def _fallback_sparse_chunk_statement(
     ]
     # 锚点组全 AND;非锚点组 SQL 侧仅要求命中其一,精确 quorum 由
     # _fallback_quorum_rows 在 Python 侧按原文复核,避免整句 AND 零召回。
-    if required_queries and optional_queries:
+    # quorum 为 0 时连"命中其一"都不该要求,否则单个可选组会在 SQL 侧退化成 AND,
+    # 把候选行提前滤光,Python 侧的放宽永远等不到数据。
+    optional_need = _fallback_optional_quorum(len(required_queries), len(optional_queries))
+    if required_queries and optional_queries and optional_need:
         tsquery = _joined(required_queries, "&&").op("&&")(_joined(optional_queries, "||"))
     elif required_queries:
         tsquery = _joined(required_queries, "&&")
@@ -1118,7 +1137,7 @@ def _fallback_quorum_rows(
     _validate_top_k(top_k)
     required = [group for group in groups if group.required]
     optional = [group for group in groups if not group.required]
-    need = math.ceil(len(optional) * _SPARSE_FALLBACK_QUORUM) if optional else 0
+    need = _fallback_optional_quorum(len(required), len(optional))
     kept: list[tuple[KbChunk, float]] = []
     for chunk, rank in rows:
         normalized_text = _normalize_constraint(f"{chunk.heading_path or ''}\n{chunk.content}")

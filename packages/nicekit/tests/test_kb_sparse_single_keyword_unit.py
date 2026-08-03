@@ -25,6 +25,7 @@ from nicekit.kb.search import (
     _fallback_sparse_chunk_statement,
     _is_ascii_identifier,
     _sparse_group_required,
+    _SparseFallbackGroup,
     _SparseLexeme,
     set_sparse_fallback_noise,
 )
@@ -167,3 +168,64 @@ def test_single_anchor_group_quorum_requires_literal_hit() -> None:
     kept = _fallback_quorum_rows([(hit, 0.9), (miss, 0.8)], groups, top_k=8)
 
     assert [chunk.id for chunk, _rank in kept] == [hit.id]
+
+
+def _chunk(content: str) -> KbChunk:
+    return KbChunk(
+        id=uuid4(),
+        org_id=uuid4(),
+        kb_id=uuid4(),
+        content=content,
+        source_ref="doc.md#chunk0",
+    )
+
+
+def test_single_optional_group_does_not_degrade_into_and() -> None:
+    """ceil(1*0.6)=1 会让 quorum 退化成 AND,锚点命中却因缺一个修饰词零召回。
+
+    真例:"WebSearch 什么时候用" —— websearch 是锚点、时候是可选词,而正文
+    "## WebSearch 还不确定地,网上搜索一下" 并没有"时候"二字。
+    """
+    groups = (
+        _SparseFallbackGroup(alternatives=(("websearch",),), required=True),
+        _SparseFallbackGroup(alternatives=(("时候",),), required=False),
+    )
+    rows = [(_chunk("## WebSearch\n- 还不确定地,网上搜索一下"), 0.1)]
+
+    assert _fallback_quorum_rows(rows, groups, top_k=10) == rows
+
+
+def test_two_optional_groups_allow_exactly_one_miss() -> None:
+    """n=2 时 ceil(2*0.6)=2 同样是 AND;有锚点时应允许漏一个,但不能全漏。"""
+    groups = (
+        _SparseFallbackGroup(alternatives=(("websearch",),), required=True),
+        _SparseFallbackGroup(alternatives=(("时候",),), required=False),
+        _SparseFallbackGroup(alternatives=(("场景",),), required=False),
+    )
+    one_miss = [(_chunk("WebSearch 的使用场景"), 0.1)]
+    all_miss = [(_chunk("WebSearch 网上搜索一下"), 0.1)]
+
+    assert _fallback_quorum_rows(one_miss, groups, top_k=10) == one_miss
+    assert _fallback_quorum_rows(all_miss, groups, top_k=10) == []
+
+
+def test_anchor_still_must_match_after_quorum_relaxation() -> None:
+    """放宽的只是可选词:锚点没在原文出现,照样拒绝。"""
+    groups = (
+        _SparseFallbackGroup(alternatives=(("websearch",),), required=True),
+        _SparseFallbackGroup(alternatives=(("时候",),), required=False),
+    )
+    rows = [(_chunk("什么时候用 Context7"), 0.1)]
+
+    assert _fallback_quorum_rows(rows, groups, top_k=10) == []
+
+
+def test_without_anchor_quorum_is_not_relaxed() -> None:
+    """全是可选词时没有锚点兜底,必须维持原有严格度,否则单词命中即召回。"""
+    groups = (
+        _SparseFallbackGroup(alternatives=(("时候",),), required=False),
+        _SparseFallbackGroup(alternatives=(("场景",),), required=False),
+    )
+    rows = [(_chunk("只提到场景两个字"), 0.1)]
+
+    assert _fallback_quorum_rows(rows, groups, top_k=10) == []

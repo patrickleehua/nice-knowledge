@@ -94,6 +94,7 @@ def test_search_execution_manifest_uses_live_search_constants() -> None:
             "ascii_anchor_min_length": 3,
             "ascii_anchor_rule": "identifier_shape_camel_or_acronym_or_separator_or_alnum",
             "quorum": 0.6,
+            "quorum_with_anchor": "at_most_optional_count_minus_one",
             "quorum_verification": "normalized_substring_on_chunk_text",
             "fetch_multiplier": 3,
             "merge": "primary_first_dedupe_chunk_id_then_top_k",
@@ -1166,9 +1167,14 @@ def test_compound_fallback_keeps_exact_name_and_bounds_component_branch() -> Non
     ).compile(dialect=postgresql.dialect())
     sql = str(compiled)
 
-    # 锚点组(全名 | 组件 AND)必须命中,optional 组 && 连接在锚点之后
+    # 锚点组(全名 | 组件 AND)必须命中。唯一的 optional 组"票价"**不进 SQL**:
+    # 有锚点时它的 quorum 为 0(见 _fallback_optional_quorum),若仍 && 上去,单个
+    # optional 就在 SQL 侧退化成 AND,把候选行提前滤光——正是"WebSearch 什么时候用"
+    # 零召回的成因。fallback 本就是 primary 精确 AND 失败后的兜底,这里宽是对的,
+    # 精度交给 ts_rank 排序。
     assert sql.count(" || ") == 2
-    assert sql.count(" && ") == 4
+    assert sql.count(" && ") == 2
+    assert "sparse_fallback_1_0_0" not in compiled.params
     assert compiled.params["sparse_fallback_0_0_0"] == "巴黎戴高乐机场"
     assert compiled.params["sparse_fallback_0_1_0"] == "巴黎"
     assert compiled.params["sparse_fallback_0_1_1"] == "戴高"
