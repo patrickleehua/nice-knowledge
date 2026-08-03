@@ -75,7 +75,7 @@ export function ConversationLocator({
             >
               <span
                 className={cn(
-                  "relative z-10 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-[#f7f7f5] ring-2 ring-[#f7f7f5] dark:bg-[#191918] dark:ring-[#191918]",
+                  "relative z-10 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-background/70 ring-2 ring-background/70 backdrop-blur-sm",
                 )}
               >
                 <span

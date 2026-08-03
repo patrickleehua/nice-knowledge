@@ -28,14 +28,27 @@ NAMESPACE_TENANT: UUID = uuid5(NAMESPACE_URL, "https://nicekit.dev/ns/tenant")
 #: 主体(用户/服务账号)命名空间
 NAMESPACE_SUBJECT: UUID = uuid5(NAMESPACE_URL, "https://nicekit.dev/ns/subject")
 
+#: SDK 内部保留标识的命名空间。与租户命名空间隔开,这样外部租户 ID 哪怕恰好
+#: 叫 "__single_tenant__" 也不会撞上 SDK 的保留分区键。
+NAMESPACE_RESERVED: UUID = uuid5(NAMESPACE_URL, "https://nicekit.dev/ns/reserved")
+
 
 def derive_uuid(external_id: object, *, namespace: UUID) -> UUID:
     """把任意外部标识确定性地派生成 UUID。
 
     ``external_id`` 会先 ``str()`` 再派生,所以 ``42`` 与 ``"42"`` 得到同一个
-    UUID —— 这是刻意的:宿主换个类型传参不该换一个租户分区。空值会拒绝,
-    因为"没有租户"必须显式走单租户模式,而不是悄悄落到一个空串派生的分区。
+    UUID —— 这是刻意的:宿主换个类型传参不该换一个租户分区。
+
+    ``None`` 与空白串一律拒绝:它们恰恰是"这个请求没带租户"的信号,而
+    ``str(None)`` 是 ``"None"``、并非空串,放过去会让所有缺租户的请求静默
+    共用同一个分区——一个看着完全正常、却把不同客户的数据混在一起的分区键。
+    没有租户请显式走单租户模式(``single_tenant_resolver``)。
     """
+    if external_id is None:
+        raise ValueError(
+            "external_id 不能为 None:没有租户请显式使用单租户模式 "
+            "(nicekit.api.deps.single_tenant_resolver)"
+        )
     text = str(external_id).strip()
     if not text:
         raise ValueError("external_id 不能为空:没有租户请显式使用单租户模式")
@@ -53,6 +66,7 @@ def subject_uuid(external_id: object, *, namespace: UUID | None = None) -> UUID:
 
 
 __all__ = [
+    "NAMESPACE_RESERVED",
     "NAMESPACE_SUBJECT",
     "NAMESPACE_TENANT",
     "derive_uuid",

@@ -22,6 +22,9 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Nice Knowledge",
   description: "基于 NiceKit 构建的多租户 Agent + 知识库工作台",
+  icons: {
+    icon: "/images/nicekit.png",
+  },
 };
 
 export default function RootLayout({

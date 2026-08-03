@@ -339,7 +339,7 @@ function ActivityWaterfall({
             {index < items.length - 1 && (
               <span className="absolute top-5 bottom-0 left-[0.59rem] w-px bg-border/85" />
             )}
-            <span className="relative z-10 mt-1 flex size-5 items-center justify-center rounded-full bg-[#f7f7f5] text-muted-foreground ring-4 ring-[#f7f7f5] dark:bg-[#191918] dark:ring-[#191918]">
+            <span className="relative z-10 mt-1 flex size-5 items-center justify-center rounded-full bg-background/70 text-muted-foreground ring-4 ring-background/70 backdrop-blur-sm">
               <ActivityDot item={item} />
             </span>
             <div className="min-w-0">

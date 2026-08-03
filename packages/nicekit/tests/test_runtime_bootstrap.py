@@ -191,6 +191,8 @@ async def test_bootstrap_platform_aggregates_seed_counts(monkeypatch) -> None:
         "agent_card",
     ]
     assert report.as_dict() == {
+        # 非单租户装配:分区键字段为 None(单租户模式才会填 SINGLE_TENANT_ORG_ID)
+        "single_tenant_org": None,
         "entity_types": 2,
         "kb_prompts": 11,
         "kb_answer_route": 1,

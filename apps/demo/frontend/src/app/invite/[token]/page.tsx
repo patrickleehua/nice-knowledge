@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CircleCheck, CircleAlert } from "lucide-react";
+import Image from "next/image";
 import { useRouter, useParams } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -41,9 +42,14 @@ export default function InvitePage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <span className="mx-auto flex size-10 items-center justify-center rounded-md bg-primary text-lg font-bold text-primary-foreground">
-            T
-          </span>
+          <Image
+            src="/images/nicekit.png"
+            alt="NiceKit"
+            width={44}
+            height={44}
+            priority
+            className="mx-auto size-11 rounded-md object-cover"
+          />
           <CardTitle>加入组织</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

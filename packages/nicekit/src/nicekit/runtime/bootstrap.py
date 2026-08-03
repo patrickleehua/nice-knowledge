@@ -73,10 +73,13 @@ class BootstrapReport:
     kb_answer_route: int = 0
     agent_default_route: int = 0
     agent_cards: int = 0
+    #: 单租户模式下实际使用的分区键(非单租户为 None)
+    single_tenant_org: UUID | None = None
     prompt_resource_issues: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
+            "single_tenant_org": str(self.single_tenant_org) if self.single_tenant_org else None,
             "entity_types": self.entity_types,
             "kb_prompts": self.kb_prompts,
             "kb_answer_route": self.kb_answer_route,
@@ -137,13 +140,17 @@ async def bootstrap_platform(
     org_id: UUID | None = None,
     entity_type_specs: list[dict] | None = None,
     seed_agent_card: bool = True,
+    single_tenant: bool = False,
 ) -> BootstrapReport:
     """幂等 seed 平台基线。调用方只需给一个**普通会话**(非 org 会话)。
 
     - ``org_id``:seed 归属组织,缺省为 ``settings.platform_org_id``;
     - ``entity_type_specs``:实体类型定义,缺省为 SDK 内置(仅 ``concept`` 兜底);
       宿主传自己的行业类型即可(SDK 不内置任何领域词表);
-    - ``seed_agent_card``:是否 seed 中性默认 agent 卡。
+    - ``seed_agent_card``:是否 seed 中性默认 agent 卡;
+    - ``single_tenant``:单租户模式下把 ``SINGLE_TENANT_ORG_ID`` 垫进
+      ``organizations``(3 张 agent 权限表有外键),并把 seed 归属改到它 ——
+      单租户的数据是普通租户数据,不该落在语义为"对所有组织可见"的平台 org 下。
 
     带 RLS 的表(kb_entity_types / agent_cards)由各 ensure_* 自行 SET LOCAL
     org 上下文,所以本函数用普通会话即可;末尾统一 commit 一次。
@@ -157,7 +164,15 @@ async def bootstrap_platform(
     from nicekit.kb.prompts_seed import ensure_kb_prompts
 
     report = BootstrapReport()
-    target_org = org_id or get_settings().platform_org_id
+    if single_tenant:
+        from nicekit.api.deps import SINGLE_TENANT_ORG_ID
+        from nicekit.tenancy.orgs import ensure_org
+
+        target_org = org_id or SINGLE_TENANT_ORG_ID
+        await ensure_org(session, target_org, name="Single Tenant", slug="single-tenant")
+        report.single_tenant_org = target_org
+    else:
+        target_org = org_id or get_settings().platform_org_id
 
     report.entity_types = await ensure_entity_types(
         session, target_org, specs=entity_type_specs

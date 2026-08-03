@@ -188,7 +188,7 @@ export function CommandInput({
   );
 
   return (
-    <div className="shrink-0 bg-gradient-to-t from-[#f7f7f5] via-[#f7f7f5] to-transparent px-3 pt-2 pb-3 dark:from-[#191918] dark:via-[#191918] sm:px-5 sm:pb-4">
+    <div className="nk-liquid-composer shrink-0 px-3 pt-2 pb-3 sm:px-5 sm:pb-4">
       <div className="mx-auto w-full max-w-[50rem]">
         <QueuedTurns
           turns={queuedTurns}

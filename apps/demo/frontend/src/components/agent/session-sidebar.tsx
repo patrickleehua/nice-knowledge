@@ -74,10 +74,10 @@ function SessionRows({
           <div
             key={session.id}
             className={cn(
-              "group flex items-center rounded-lg transition-colors",
+              "group flex items-center rounded-xl transition-colors",
               active
-                ? "bg-white/80 text-foreground shadow-xs dark:bg-white/[0.075]"
-                : "hover:bg-black/[0.04] dark:hover:bg-white/[0.055]",
+                ? "bg-white/82 text-foreground shadow-sm ring-1 ring-black/[0.045] dark:bg-white/[0.085] dark:ring-white/[0.055]"
+                : "text-muted-foreground hover:bg-white/45 hover:text-foreground dark:hover:bg-white/[0.055]",
             )}
           >
             <button
@@ -90,7 +90,7 @@ function SessionRows({
               <MessageSquareText
                 className={cn(
                   "size-3.5 shrink-0",
-                  active ? "text-foreground" : "text-muted-foreground/70",
+                  active ? "text-primary" : "text-muted-foreground/70",
                 )}
               />
               <span
@@ -154,7 +154,7 @@ export function SessionSidebar({
     <>
       <aside
         className={cn(
-          "hidden shrink-0 flex-col border-r border-black/[0.055] bg-[#efefec] transition-[width] duration-200 dark:border-white/[0.055] dark:bg-[#151514] md:flex",
+          "nk-session-sidebar hidden shrink-0 flex-col transition-[width] duration-200 md:flex",
           collapsed ? "w-12" : "w-64",
         )}
         aria-label="会话导航"
@@ -191,7 +191,8 @@ export function SessionSidebar({
               title={scopeLabel}
               aria-label={`查看${scopeLabel}`}
               className={cn(
-                activeSessionId && "bg-black/[0.055] dark:bg-white/[0.075]",
+                activeSessionId &&
+                  "bg-white/70 shadow-xs ring-1 ring-black/[0.045] dark:bg-white/[0.08] dark:ring-white/[0.055]",
               )}
             >
               <History className="size-4" />
@@ -203,7 +204,7 @@ export function SessionSidebar({
               <Button
                 type="button"
                 variant="ghost"
-                className="min-w-0 flex-1 justify-start"
+                className="min-w-0 flex-1 justify-start bg-white/36 hover:bg-white/66 dark:bg-white/[0.035] dark:hover:bg-white/[0.075]"
                 onClick={onCreate}
                 disabled={disabled}
               >
@@ -243,7 +244,7 @@ export function SessionSidebar({
       <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
         <SheetContent
           side="left"
-          className="w-[min(22rem,88vw)] gap-0 p-0 md:hidden"
+          className="nk-session-sidebar w-[min(22rem,88vw)] gap-0 p-0 md:hidden"
         >
           <SheetHeader className="border-b border-border/70 pr-12">
             <SheetTitle>会话</SheetTitle>

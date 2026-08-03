@@ -28,7 +28,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nicekit.core.db import bind_org_context, get_session
 from nicekit.core.security import decode_access_token
 from nicekit.models.tenancy import Role
+from nicekit.tenancy.mapping import NAMESPACE_RESERVED, derive_uuid, subject_uuid
 from nicekit.tenancy.roles import write_roles
+
+#: 单租户模式的默认分区键。两点刻意为之:
+#: 1. 独立于 platform_org_id —— 后者语义是"对所有组织可见",单租户数据放进去
+#:    会在将来接入第二个租户时静默泄漏;
+#: 2. 走保留命名空间而非租户命名空间 —— 外部租户 ID 哪怕恰好叫
+#:    "__single_tenant__" 也撞不上这个分区键。
+SINGLE_TENANT_ORG_ID = derive_uuid("single_tenant", namespace=NAMESPACE_RESERVED)
 
 
 @dataclass(frozen=True)
@@ -80,13 +88,39 @@ async def _jwt_principal_resolver(request: Request) -> Principal:
 _principal_resolver: PrincipalResolver = _jwt_principal_resolver
 
 
+#: 最近一次 ``create_app`` 挂载的 SDK 身份路由名(由 runtime.app_factory 写入)
+_mounted_auth_routers: tuple[str, ...] = ()
+
+
+def record_mounted_auth_routers(names: tuple[str, ...]) -> None:
+    """由 ``runtime.app_factory`` 在装配时登记,供本模块反向拦截接线错误。"""
+    global _mounted_auth_routers
+    _mounted_auth_routers = tuple(names)
+
+
+def mounted_auth_routers() -> tuple[str, ...]:
+    """最近一次装配挂载的 SDK 身份路由名(测试与自检用)。"""
+    return _mounted_auth_routers
+
+
 def set_principal_resolver(resolver: PrincipalResolver | None) -> None:
     """替换身份解析实现;传 None 恢复 SDK 自带的 JWT 解析。
 
-    装配期调用一次即可(``create_app`` 之前)。注册后 SDK 的 auth router
-    就不该再挂载——两套身份来源并存只会让"当前是谁"变得不可推理。
+    装配期调用一次即可,**必须在 ``create_app`` 之前**。注册后 SDK 的 auth
+    router 就不该再挂载——两套身份来源并存只会让"当前是谁"变得不可推理。
+
+    如果顺序反了(先 ``create_app`` 挂着 auth router、之后才接管身份),
+    ``create_app`` 的自检已经跑完、什么都没拦住,所以这里反向再拦一次:
+    这个顺序恰恰是最容易写出来的那个。
     """
     global _principal_resolver
+    if resolver is not None and _mounted_auth_routers:
+        raise RuntimeError(
+            f"身份接线顺序错误:app 已装配且挂着 SDK 身份路由 "
+            f"{list(_mounted_auth_routers)},此时再接管身份不会被 create_app 的"
+            "自检发现。请在 create_app 之前调用 set_principal_resolver(),并从"
+            "routers 里排除 auth/members:default_routers(exclude=('auth','members'))。"
+        )
     _principal_resolver = resolver or _jwt_principal_resolver
 
 
@@ -154,7 +188,16 @@ def single_tenant_resolver(
     """单租户模式:分区键恒定,不做认证。
 
     适合内部工具、单公司自用系统,或"认证由网关/反向代理做完了"的部署。
-    默认 org_id 取 ``settings.platform_org_id``(迁移已 seed 该行,无需再建)。
+    默认 org_id 是 :data:`SINGLE_TENANT_ORG_ID` —— 一个独立的固定 UUID,
+    **刻意不用 ``platform_org_id``**:平台 org 的语义是"这份数据对所有组织
+    可见"(见 kb/search.py 的 layer 判定与 kb/image_assets.py 的可见性过滤)。
+    单租户期间两者行为无差别,但哪天要接入第二个租户,原先放在平台 org 下的
+    全部知识会立刻对新租户可见——那是一次静默的数据泄漏,且难以回溯。
+    独立 org 则只是一个普通租户,升级多租户时什么都不用改。
+
+    首次启动需要让这个 org 在库里存在(3 张 agent 权限表有外键):
+    ``bootstrap_platform(session, single_tenant=True)`` 或自己调
+    ``tenancy.orgs.ensure_org(session, SINGLE_TENANT_ORG_ID)``。
 
     ``role_of``/``subject_of`` 可选:网关把已认证用户放在请求头里时,用它们
     把用户带进来,这样审计与长期记忆才分得清人;不传则所有请求视为同一主体。
@@ -162,11 +205,9 @@ def single_tenant_resolver(
     ⚠️ 它不做任何身份校验。**必须**确保 SDK 不直接暴露在公网,或前置一层
     完成认证的网关——否则等于把平台管理端敞开。
     """
-    from nicekit.core.config import get_settings
-
-    fixed_org = org_id or get_settings().platform_org_id
-    # 固定主体:同一个 UUID 派生自 org,保证多次启动稳定(审计里能对得上)
-    fixed_subject = subject_id or UUID(int=fixed_org.int ^ 0x5EED)
+    fixed_org = org_id or SINGLE_TENANT_ORG_ID
+    # 固定主体:从 org 确定性派生,保证多次启动稳定(审计里能对得上同一个人)
+    fixed_subject = subject_id or subject_uuid(f"single-tenant:{fixed_org}")
 
     async def _resolve(request: Request) -> Principal:
         return Principal(

@@ -1232,7 +1232,7 @@ function ChatWorkbench() {
         </div>
       </ShellHeader>
       <div className="h-[calc(100dvh-5rem)] sm:h-[calc(100dvh-6.5rem)]">
-        <div className="flex h-full min-h-0 overflow-hidden bg-[#f7f7f5] dark:bg-[#191918]">
+        <div className="nk-liquid-surface flex h-full min-h-0 overflow-hidden border-t border-white/45 dark:border-white/[0.045]">
           <SessionSidebar
             scopeLabel={scoped ? `${scopeType} 会话` : "通用会话"}
             sessions={sessions.data?.items}
@@ -1246,8 +1246,8 @@ function ChatWorkbench() {
             onSelect={openSession}
             onDelete={(id) => deleteSession.mutateAsync(id)}
           />
-          <main className="flex min-w-0 flex-1 flex-col bg-[#f7f7f5] dark:bg-[#191918]">
-            <div className="flex h-11 shrink-0 items-center gap-2 px-3 sm:px-4">
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            <div className="flex h-11 shrink-0 items-center gap-2 bg-white/18 px-3 backdrop-blur-sm dark:bg-white/[0.025] sm:px-4">
               <Button
                 type="button"
                 variant="ghost"
@@ -1297,7 +1297,7 @@ function ChatWorkbench() {
                     element.clientHeight <
                   96;
               }}
-              className="min-h-0 flex-1 overflow-y-auto bg-[#f7f7f5] dark:bg-[#191918]"
+              className="min-h-0 flex-1 overflow-y-auto"
             >
               <AgentConversation
                 items={items}

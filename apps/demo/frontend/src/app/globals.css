@@ -141,6 +141,126 @@
   }
 }
 
+.nk-liquid-surface {
+  background:
+    radial-gradient(
+      42rem circle at 18% 10%,
+      color-mix(in oklab, var(--teal) 18%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(
+      46rem circle at 82% 4%,
+      color-mix(in oklab, var(--primary) 12%, transparent),
+      transparent 58%
+    ),
+    radial-gradient(
+      34rem circle at 52% 82%,
+      color-mix(in oklab, var(--accent) 74%, transparent),
+      transparent 65%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--background) 92%, white),
+      color-mix(in oklab, var(--background) 84%, var(--muted))
+    );
+}
+
+.dark .nk-liquid-surface {
+  background:
+    radial-gradient(
+      44rem circle at 20% 4%,
+      color-mix(in oklab, var(--teal) 16%, transparent),
+      transparent 62%
+    ),
+    radial-gradient(
+      46rem circle at 84% 6%,
+      color-mix(in oklab, var(--primary) 18%, transparent),
+      transparent 60%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--background) 88%, black),
+      color-mix(in oklab, var(--card) 70%, black)
+    );
+}
+
+.nk-liquid-composer {
+  background:
+    linear-gradient(
+      180deg,
+      transparent,
+      color-mix(in oklab, var(--background) 52%, transparent) 28%,
+      color-mix(in oklab, var(--background) 78%, transparent)
+    );
+  backdrop-filter: blur(18px) saturate(140%);
+}
+
+.nk-session-sidebar {
+  border-right: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, white 56%, transparent),
+      color-mix(in oklab, var(--background) 72%, transparent)
+    ),
+    radial-gradient(
+      24rem circle at 82% 10%,
+      color-mix(in oklab, var(--teal) 12%, transparent),
+      transparent 62%
+    );
+  box-shadow:
+    inset -1px 0 0 color-mix(in oklab, white 38%, transparent),
+    12px 0 34px color-mix(in oklab, var(--foreground) 5%, transparent);
+  backdrop-filter: blur(24px) saturate(145%);
+}
+
+.dark .nk-session-sidebar {
+  border-right-color: color-mix(in oklab, var(--border) 72%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--card) 76%, transparent),
+      color-mix(in oklab, var(--background) 72%, transparent)
+    ),
+    radial-gradient(
+      24rem circle at 78% 8%,
+      color-mix(in oklab, var(--teal) 10%, transparent),
+      transparent 62%
+    );
+  box-shadow:
+    inset -1px 0 0 color-mix(in oklab, white 7%, transparent),
+    12px 0 34px color-mix(in oklab, black 16%, transparent);
+}
+
+.nk-brand-glass-mark {
+  border-radius: 1.35rem;
+  border: 1px solid color-mix(in oklab, white 62%, transparent);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in oklab, white 72%, transparent),
+      color-mix(in oklab, var(--teal) 18%, transparent)
+    );
+  box-shadow:
+    0 18px 48px color-mix(in oklab, var(--teal) 22%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 72%, transparent),
+    inset 0 -18px 30px color-mix(in oklab, var(--primary) 7%, transparent);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+
+.dark .nk-brand-glass-mark {
+  border-color: color-mix(in oklab, white 18%, transparent);
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in oklab, white 12%, transparent),
+      color-mix(in oklab, var(--teal) 16%, transparent)
+    );
+  box-shadow:
+    0 18px 52px color-mix(in oklab, var(--teal) 18%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 18%, transparent);
+}
+
 /* 发布页构建中的不定进度：只表达任务仍在运行，不虚构具体完成百分比 */
 .release-build-progress {
   animation: release-build-progress 1.6s ease-in-out infinite;

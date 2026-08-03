@@ -4,10 +4,10 @@ import {
   BookOpenText,
   CalendarClock,
   Globe,
-  Sparkles,
   Target,
   type LucideIcon,
 } from "lucide-react";
+import Image from "next/image";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -84,8 +84,15 @@ function EmptyState({
 }) {
   return (
     <div className="flex min-h-[min(32rem,62dvh)] flex-col items-center justify-center py-10 text-center">
-      <div className="mb-5 flex size-10 items-center justify-center rounded-full bg-foreground text-background">
-        <Sparkles className="size-4" />
+      <div className="nk-brand-glass-mark mb-5 flex size-16 items-center justify-center">
+        <Image
+          src="/images/nicekit.png"
+          alt="NiceKit"
+          width={52}
+          height={52}
+          priority
+          className="size-13 rounded-[1rem] object-cover"
+        />
       </div>
       <h2 className="text-xl font-semibold tracking-[-0.02em]">{title}</h2>
       <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">

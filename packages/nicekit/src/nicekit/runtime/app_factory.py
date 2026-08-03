@@ -156,6 +156,48 @@ def _exempt_metrics_path(settings: Settings) -> None:
         settings.rate_limit_exempt_paths = [*settings.rate_limit_exempt_paths, METRICS_PATH]
 
 
+def _check_auth_wiring(routers: Sequence[APIRouter]) -> None:
+    """启动自检:系统里"当前是谁"必须只有一个来源。
+
+    宿主经 ``deps.set_principal_resolver()`` 接管身份后,若 SDK 的 auth/members
+    还挂着,库里就有两套主体:一套是 SDK 自己签发 JWT、自己建的 users/memberships,
+    另一套是宿主 resolver 现算出来的 org_id/user_id。两边可以指向不同的人甚至不同
+    租户,而请求走哪套取决于客户端带了什么头 —— 越权排查时"这行是谁写的"根本推不
+    出来。这种接线错误在运行期只表现为偶发串号,所以必须在装配期就炸掉。
+
+    反向组合(内置 JWT 却没挂 auth)只是登录端点缺失,可能是宿主自己发 SDK 格式
+    token 的有意安排,记 warning 不阻断。routers 为空时不提醒:那时根本没有 API
+    面,谈不上"少了登录端点"。
+
+    延迟 import:``nicekit.api.v1.router`` 会拉起全部 v1 router 的依赖链,只在真
+    需要自检时付这个代价(与本模块其余延迟 import 的理由一致)。
+    """
+    from nicekit.api import deps
+    from nicekit.api.v1.router import mounted_auth_router_names
+
+    mounted = mounted_auth_router_names(routers)
+    # 记录本次装配挂了哪些身份路由:装配之后才 set_principal_resolver 的顺序
+    # 同样是错的接线,但那时 create_app 早跑完了,只有反向拦截才能盖住
+    # (见 deps.set_principal_resolver)。
+    deps.record_mounted_auth_routers(mounted)
+    if not deps.uses_builtin_auth():
+        if mounted:
+            raise RuntimeError(
+                f"身份接线自相矛盾:已用 set_principal_resolver() 接管身份,"
+                f"却仍挂载了 SDK 的身份路由 {list(mounted)}。"
+                "两套身份来源并存会让'当前是谁'不可推理,请从 routers 里排除 "
+                "auth/members:default_routers(exclude=('auth', 'members'));"
+                "确有需要可传 create_app(check_auth_wiring=False) 关闭本自检。"
+            )
+        return
+    if routers and "auth" not in mounted:
+        logger.warning(
+            "仍在使用 SDK 自带的 JWT 认证,但 routers 里没有 auth router:"
+            "登录端点缺失,客户端拿不到 token。若由宿主自行签发 SDK 格式的 token,"
+            "这是预期行为,可传 check_auth_wiring=False 静音。"
+        )
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -171,6 +213,7 @@ def create_app(
     expose_metrics: bool = True,
     recover_orphans_on_startup: bool = True,
     warm_mcp_on_startup: bool = True,
+    check_auth_wiring: bool = True,
 ) -> FastAPI:
     """组装一个可运行的 FastAPI 应用。
 
@@ -181,8 +224,14 @@ def create_app(
     - ``startup_hooks`` / ``shutdown_hooks``:接 ``session_factory`` 的协程,
       单个失败只记日志、不阻断进程(启动期任何一步都不该让服务起不来)。
     - ``tool_registry``:宿主自定义工具注册表;传入即设为 agent 的默认注册表。
+    - ``check_auth_wiring``:启动期校验身份来源唯一(见 :func:`_check_auth_wiring`)。
     """
     resolved = settings or get_settings()
+    # routers 可能是生成器,自检与挂载都要遍历,先定格;自检放在任何副作用
+    # (tool_registry 合并)之前,接线错就别把全局注册表改脏了。
+    mounted_routers = tuple(routers)
+    if check_auth_wiring:
+        _check_auth_wiring(mounted_routers)
     if tool_registry is not None:
         # 宿主自建 registry 并入 SDK 默认表(agent service 缺省从它取工具目录);
         # 重名会报错 —— 静默覆盖会让"哪份实现在跑"变成运行期谜题。
@@ -280,7 +329,7 @@ def create_app(
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "Content-Disposition", "X-Preview-Filename"],
     )
-    for router in routers:
+    for router in mounted_routers:
         app.include_router(router, prefix=router_prefix)
     if expose_metrics:
         # Prometheus 文本导出:根路径无鉴权只读(不含租户业务明文),
