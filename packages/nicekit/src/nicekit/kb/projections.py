@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -119,6 +119,30 @@ def active_projection_filter(model: type[Any]) -> ColumnElement[bool]:
             and_(model.snapshot_id.is_(None), ~managed_active),
         ),
     )
+
+
+def dedupe_wiki_claims_by_title(claims: Iterable[FactClaim]) -> list[FactClaim]:
+    """wiki 页按 title 唯一:同名保留 created_at 最新的一条(并列时按 id 定序)。
+
+    KbPage 投影与检索卡片投影**必须共用这把去重键**。两边键不一致时,同名 claim
+    会各建一张检索卡片,而 KbPage 只留一行,多出来的卡片在检索恢复时反查不到实体
+    行,只能被丢弃——白占嵌入成本与候选位,还刷 "实体卡片残留" 告警。
+    """
+    latest_by_title: dict[str, FactClaim] = {}
+    for claim in claims:
+        if claim.predicate != "wiki_page":
+            continue
+        title = _required_text(_effective_payload(claim), "title")
+        current = latest_by_title.get(title)
+        if current is None or (
+            claim.created_at.isoformat() if claim.created_at else "",
+            str(claim.id),
+        ) > (
+            current.created_at.isoformat() if current.created_at else "",
+            str(current.id),
+        ):
+            latest_by_title[title] = claim
+    return list(latest_by_title.values())
 
 
 def projection_row_id(snapshot_id: UUID, projection_type: str, claim_id: UUID) -> UUID:
@@ -464,21 +488,7 @@ class WikiProjectionBuilder:
         supported = supported_projection_predicates(
             await load_custom_entity_types(session, context.org_id)
         )
-        relevant_by_title: dict[str, FactClaim] = {}
-        for claim in claims:
-            if claim.predicate != "wiki_page":
-                continue
-            title = _required_text(_effective_payload(claim), "title")
-            current = relevant_by_title.get(title)
-            if current is None or (
-                claim.created_at.isoformat() if claim.created_at else "",
-                str(claim.id),
-            ) > (
-                current.created_at.isoformat() if current.created_at else "",
-                str(current.id),
-            ):
-                relevant_by_title[title] = claim
-        relevant = list(relevant_by_title.values())
+        relevant = dedupe_wiki_claims_by_title(claims)
         evidence_revisions = await _evidence_revision_ids(
             session, [claim.id for claim in relevant]
         )

@@ -6,6 +6,7 @@ hotel_pools 投影表随 5 张旅游专表一并删除(MIGRATION-PLAN B1/B6/B7),
 必需清单里。
 """
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from nicekit.kb.projections import (
     _validate_source_document,
     active_projection_filter,
     card_source_ref,
+    dedupe_wiki_claims_by_title,
     parse_card_ref,
     projection_row_id,
     supported_projection_predicates,
@@ -132,3 +134,57 @@ def test_default_registry_requires_all_five_materializers() -> None:
     ]
     # 全量清单与必需清单一致:默认注册的 builder 都是发布门禁
     assert projection_builders.manifest() == projection_builders.required_manifest()
+
+
+def _wiki_claim(title: str, *, created_at: datetime, claim_id: UUID | None = None) -> FactClaim:
+    return FactClaim(
+        id=claim_id or uuid4(),
+        org_id=uuid4(),
+        kb_id=uuid4(),
+        subject_type="source_document",
+        subject_id=uuid4(),
+        predicate="wiki_page",
+        value_json={"title": title, "content_markdown": f"# {title}"},
+        created_at=created_at,
+    )
+
+
+def test_wiki_claims_dedupe_to_the_latest_per_title() -> None:
+    """同名 wiki 页只保留最新一条:KbPage 投影与检索卡片必须同键。
+
+    两边键不一致时同名 claim 会各建一张卡,而 KbPage 只留一行,多出的卡片在
+    检索恢复时反查不到实体行,变成只能被丢弃的孤儿卡片。
+    """
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    older = _wiki_claim("知识库总览", created_at=base)
+    newer = _wiki_claim("知识库总览", created_at=base + timedelta(days=1))
+    other = _wiki_claim("原始需求模板", created_at=base)
+
+    kept = dedupe_wiki_claims_by_title([older, newer, other])
+
+    assert {claim.id for claim in kept} == {newer.id, other.id}
+
+
+def test_wiki_dedupe_breaks_created_at_ties_by_id() -> None:
+    """created_at 并列时按 id 定序,保证快照重建结果稳定可复现。"""
+    moment = datetime(2026, 1, 1, tzinfo=UTC)
+    low = _wiki_claim("同名页", created_at=moment, claim_id=UUID(int=1))
+    high = _wiki_claim("同名页", created_at=moment, claim_id=UUID(int=2))
+
+    assert [claim.id for claim in dedupe_wiki_claims_by_title([low, high])] == [high.id]
+    assert [claim.id for claim in dedupe_wiki_claims_by_title([high, low])] == [high.id]
+
+
+def test_wiki_dedupe_ignores_non_wiki_predicates() -> None:
+    entity_claim = FactClaim(
+        id=uuid4(),
+        org_id=uuid4(),
+        kb_id=uuid4(),
+        subject_type="source_document",
+        subject_id=uuid4(),
+        predicate="product",
+        value_json={"name": "Widget"},
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert dedupe_wiki_claims_by_title([entity_claim]) == []
