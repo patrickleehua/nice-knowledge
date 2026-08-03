@@ -251,6 +251,22 @@ class EntityOut(BaseModel):
     created_at: datetime | None
 
 
+async def _visible_kb_or_404(session: AsyncSession, kb_id: UUID) -> KnowledgeBase:
+    """读路径的存在性检查。
+
+    只查得到 RLS 放行的行 —— 本 org、平台公共库、被显式分享的库都算可见,
+    所以这里**不再比对 org_id**(那会把平台库与分享库误判成"不存在")。
+    查不到就是 404,而不是静默返回空列表:空列表让调用方分不清"这个库没有实体"
+    和"这个库根本不属于我",与写路径的 404 也不一致。
+    """
+    kb = (
+        await session.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+    ).scalar_one_or_none()
+    if kb is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "知识库不存在")
+    return kb
+
+
 async def _writable_kb_or_409(
     session: AsyncSession, org_id: UUID, kb_id: UUID
 ) -> KnowledgeBase:
@@ -285,6 +301,7 @@ async def list_entities(
     ctx: Ctx,
     entity_type_key: str | None = None,
 ) -> list[EntityOut]:
+    await _visible_kb_or_404(session, kb_id)
     stmt = (
         select(KbEntity)
         .where(

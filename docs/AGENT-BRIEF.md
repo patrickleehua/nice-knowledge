@@ -428,11 +428,18 @@ def build_app() -> FastAPI:
 
 ## 7. 已知契约缺口(写代码时绕开)
 
-1. **没有 `ensure_user`**:`nicekit.tenancy.orgs` 只有 `ensure_org`,但 agent 权限三表同时有
-   `users` 外键。照抄 §5.1。
-2. **`check_auth_wiring` 有顺序盲区**:`create_app` 之后再 `set_principal_resolver` 可绕过(§4.2)。
-3. **`platform_admin` 不可注册**(`register_roles` 会 `ValueError`),bridge 模式想要平台管理面
-   只能在角色映射里硬写字面量 `"platform_admin"`。
-4. **resolver 是进程级全局**,无法按 app 实例隔离;测试必须 teardown 还原。
-5. **角色名不校验**:`Principal(role="typo")` 不报错,只在每个端点静默 403。建议加单测
-   `assert set(ROLE_MAP.values()) <= set(all_roles())`。
+1. **`platform_admin` 不可注册**(`register_roles` 会 `ValueError`),bridge 模式想要平台管理面
+   只能在角色映射里硬写字面量 `"platform_admin"`,或 `from nicekit.tenancy.roles import PLATFORM_ADMIN`
+   (推荐后者,拼错会 ImportError 而不是静默 403)。
+2. **resolver 是进程级全局**,无法按 app 实例隔离:同进程跑不了两个不同模式的 app,测试必须
+   teardown 还原(`set_principal_resolver(None)`)。单进程单模式的常规部署不受影响。
+3. **角色名不校验**:`Principal(role="typo")` 不报错,只在每个端点静默 403 —— 排查时看不出是
+   拼写问题。建议自己加一条单测:`assert set(ROLE_MAP.values()) <= set(all_roles())`。
+
+> 已修复(2026-08-03),旧文档若仍提到请以本节为准:
+> - `ensure_user` / `ensure_principal` **已提供**,从 `nicekit.tenancy` 导出;`ensure_principal`
+>   一次垫齐 org 与 user,是桥接接入的推荐入口。
+> - `check_auth_wiring` 的**顺序盲区已封**:`create_app` 之后再 `set_principal_resolver` 会
+>   直接 `RuntimeError`,双向都拦。
+> - `bootstrap_platform(single_tenant=True)` 现在一并垫 org 与默认操作者,后者可用
+>   `single_tenant_subject_id()` 取到。
