@@ -267,3 +267,138 @@ def test_build_kb_answer_route_skips_when_default_model_missing() -> None:
     )
 
     assert build_kb_answer_route(settings) is None  # type: ignore[arg-type]
+
+
+def _graph_hit(data_extra: dict) -> SearchHit:
+    """构造一条图谱通道命中,只关心 data 里的图谱三件套如何进入答问上下文。"""
+    return SearchHit(
+        kind="chunk",
+        layer="tenant",
+        kb_id=str(uuid4()),
+        source="java项目编码规范通用.md",
+        confidence=0.7,
+        data={
+            "id": str(uuid4()),
+            "title": "modelMemory 说明",
+            "scores": {"rrf": 0.1},
+            **data_extra,
+        },
+        citation={
+            "kind": "fact_evidence",
+            "revision_id": str(uuid4()),
+            "source_doc_id": str(uuid4()),
+            "source_sha256": "b" * 64,
+            "quote_text": "modelMemory 用于存储模型记忆",
+            "fact_claim_id": str(uuid4()),
+            "evidence_span_id": str(uuid4()),
+            "chunk_id": str(uuid4()),
+            "page": None,
+            "start_line": 3,
+            "end_line": 4,
+            "cell_ref": None,
+        },
+    )
+
+
+def test_graph_internals_never_leak_into_answer_context() -> None:
+    """edge UUID / 裸谓词 / 跳数不得作为业务字段喂给答问模型。"""
+    edge_id = str(uuid4())
+    context = build_answer_context(
+        [
+            _graph_hit(
+                {
+                    "via": "graph",
+                    "graph_hops": 1,
+                    "graph_predicates": ["located_in"],
+                    "graph_edge_ids": [edge_id],
+                    "graph_path_labels": ["modelMemory", "项目根目录"],
+                }
+            )
+        ]
+    )
+
+    assert edge_id not in context
+    assert "graph_edge_ids" not in context
+    assert "graph_predicates" not in context
+    assert "graph_hops" not in context
+    assert "located_in" not in context
+
+
+def test_graph_relation_renders_readable_path_with_entity_names() -> None:
+    context = build_answer_context(
+        [
+            _graph_hit(
+                {
+                    "via": "graph",
+                    "graph_hops": 1,
+                    "graph_predicates": ["located_in"],
+                    "graph_path_labels": ["modelMemory", "项目根目录"],
+                }
+            )
+        ]
+    )
+
+    assert "知识关联：modelMemory 位于 项目根目录" in context
+
+
+def test_graph_relation_degrades_without_entity_names() -> None:
+    """上游没给实体名时不猜,只如实说明跳数与关系类型。"""
+    context = build_answer_context(
+        [
+            _graph_hit(
+                {
+                    "via": "graph",
+                    "graph_hops": 2,
+                    "graph_predicates": ["located_in", "shared_context"],
+                }
+            )
+        ]
+    )
+
+    assert "知识关联：经 2 跳位于、同源共现关联" in context
+
+
+def test_graph_relation_absent_without_predicates() -> None:
+    """没有谓词链就没有关联可讲;via 是哪一路不影响。"""
+    context = build_answer_context([_graph_hit({"via": "semantic_card"})])
+
+    assert "知识关联" not in context
+
+
+def test_graph_relation_rendered_when_graph_shares_hit_with_other_channel() -> None:
+    """图谱与 sparse/dense 命中同一 chunk 时 via 归首个发现者,关联仍须渲染。
+
+    跨文档串联的价值恰恰在这类交叉命中上,按 via 过滤会把它整个丢掉。
+    """
+    context = build_answer_context(
+        [
+            _graph_hit(
+                {
+                    "via": "semantic_card",
+                    "graph_hops": 1,
+                    "graph_predicates": ["located_in"],
+                    "graph_path_labels": ["modelMemory", "项目根目录"],
+                }
+            )
+        ]
+    )
+
+    assert "知识关联：modelMemory 位于 项目根目录" in context
+
+
+def test_graph_relation_ignores_mismatched_label_count() -> None:
+    """labels 与 predicates 数量对不上说明上游有 bug,宁可降级也不拼错关系。"""
+    context = build_answer_context(
+        [
+            _graph_hit(
+                {
+                    "via": "graph",
+                    "graph_hops": 2,
+                    "graph_predicates": ["located_in", "includes"],
+                    "graph_path_labels": ["modelMemory", "项目根目录"],
+                }
+            )
+        ]
+    )
+
+    assert "知识关联：经 2 跳位于、包含关联" in context

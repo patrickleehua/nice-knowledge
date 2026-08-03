@@ -26,6 +26,9 @@ _MAX_SOURCES = 12
 _MAX_FIELD_CHARS = 800
 _MAX_SOURCE_CHARS = 3_500
 _CITATION_PATTERN = re.compile(r"\[(\d{1,3})\]")
+#: 不得作为"业务字段"喂给答问模型的内部键。图谱三件套(hops/predicates/edge_ids)
+#: 走 :func:`_graph_relation_context` 渲染成自然语言关联路径,裸谓词与 UUID 对模型
+#: 无信息量,且与系统提示"不要描述检索分数、实体节点"的口径直接冲突。
 _SYSTEM_DATA_KEYS = frozenset(
     {
         "id",
@@ -36,6 +39,10 @@ _SYSTEM_DATA_KEYS = frozenset(
         "image_asset_id",
         "via",
         "sibling_count",
+        "graph_hops",
+        "graph_predicates",
+        "graph_edge_ids",
+        "graph_path_labels",
     }
 )
 
@@ -100,6 +107,50 @@ def _clean_text(value: Any) -> str | None:
     return text[:_MAX_FIELD_CHARS] if text else None
 
 
+#: 关系谓词的中文口径,与抽取期下发给模型的 RELATION_SPEC 同源
+#: (见 nicekit.kb.ingestion 的实体抽取前缀),避免同一谓词两处说法不一致。
+_GRAPH_PREDICATE_LABELS = {
+    "located_in": "位于",
+    "part_of": "属于",
+    "includes": "包含",
+    "serves": "服务于",
+    "supports": "支持",
+    "near": "邻近",
+    "derived_from": "来源于",
+    "related": "关联",
+    "shared_context": "同源共现",
+}
+_MAX_GRAPH_PATH_CHARS = 300
+
+
+def _graph_relation_context(hit: SearchHit) -> str | None:
+    """把图谱召回的多跳路径渲染成一行自然语言;缺实体名时降级为谓词链。
+
+    仅在该命中确实来自图谱通道时输出。裸谓词与 edge UUID 对答问模型没有信息
+    量,这里改用"A 位于 B"的可读形态,模型才能利用跨文档串联起来的上下文。
+    """
+    # 不看 via:图谱与 sparse/dense 命中同一 chunk 时 via 归首个发现者,但关联
+    # 信息同样有价值,只要检索层挂上了谓词链就渲染。
+    raw_predicates = hit.data.get("graph_predicates")
+    if not isinstance(raw_predicates, (list, tuple)) or not raw_predicates:
+        return None
+    predicates = [
+        _GRAPH_PREDICATE_LABELS.get(str(item), str(item)) for item in raw_predicates
+    ]
+    raw_labels = hit.data.get("graph_path_labels")
+    labels: list[str] = []
+    if isinstance(raw_labels, (list, tuple)):
+        labels = [text for text in (_clean_text(item) for item in raw_labels) if text]
+    if len(labels) == len(predicates) + 1:
+        path = labels[0]
+        for predicate, target in zip(predicates, labels[1:], strict=True):
+            path += f" {predicate} {target}"
+    else:
+        # 上游未提供实体名(或长度对不上)时不猜,只如实说明经过了几跳、什么关系。
+        path = f"经 {len(predicates)} 跳{'、'.join(predicates)}关联"
+    return f"知识关联：{path}"[:_MAX_GRAPH_PATH_CHARS]
+
+
 def _source_title(hit: SearchHit) -> str:
     for key in ("name", "title", "canonical_name", "heading_path"):
         value = _clean_text(hit.data.get(key))
@@ -125,6 +176,10 @@ def _source_context(ref: int, hit: SearchHit) -> str:
             fields.append(f"{key}={value}")
     if fields:
         rows.append("业务字段：" + "；".join(fields))
+
+    relation = _graph_relation_context(hit)
+    if relation:
+        rows.append(relation)
 
     quote = _clean_text(citation.get("quote_text"))
     if quote:
