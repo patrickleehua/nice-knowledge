@@ -264,6 +264,17 @@ class KbSettings(_DomainSettings):
     # 超过该阈值的向量命中丢弃(检索为空如实返回,不给乱码查询编造 top-k 最近邻)。
     # PostgreSQL FTS sparse 通道不受该距离阈值影响。
     kb_vector_max_distance: float = 0.62
+
+    # KB 检索缓存(两层,均可单独关闭;redis 不可用时自动降级为直查库)。
+    # 结果缓存的键压了一枚"当前可见 (kb, active_snapshot) 集合"的指纹,发布新
+    # 快照、切换快照指针或可见范围变化都会立刻换键,因此 TTL 只是兜底上限,不是
+    # 数据新鲜度的唯一保障。0 = 关闭该层。
+    # 取 60s 的理由:同一个人反复刷新/翻页是主要重复来源,而摄入→发布链路远长于
+    # 一分钟,拿不到"刚写完就该看到"的场景;要严格实时可设为 0。
+    kb_search_cache_ttl_seconds: int = Field(default=60, ge=0)
+    # query 向量是 (文本, 模型, 维度) 的确定映射,与知识库内容无关,可长期缓存。
+    # 换嵌入模型不需要清理:模型名与维度已经在缓存键里。
+    kb_query_vector_cache_ttl_seconds: int = Field(default=7 * 24 * 3600, ge=0)
     # 口径澄清(2026-07-23):search.py manifest 里的 enable_gate_min_gain_points:
     # 5.0 只是文档性声明(参与 config_fingerprint,不可改动),代码中没有自动
     # gain 门控。真正的门 = 本开关默认 False + 评测实测增益 >= 5pt 后人工改 True。
@@ -279,7 +290,7 @@ class KbSettings(_DomainSettings):
     # 依赖问题类型——多跳/关系推理上可达 +10pt 以上,而简单单跳事实检索上图谱常
     # 因引入冗余与噪声而**低于**纯向量+稀疏。混合 query 集的总均值会同时掩盖这
     # 两侧。长期更优解是按 query 意图路由,而非全局一刀切。
-    kb_graph_search_enabled: bool = False
+    kb_graph_search_enabled: bool = True
     kb_graph_max_hops: int = Field(default=2, ge=1, le=2)
 
     # KB 健康巡检(监控双轨之二:系统内主动告警):间隔秒,0 = 关;

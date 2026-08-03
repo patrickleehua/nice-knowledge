@@ -34,6 +34,12 @@ KB_SEARCH_DENSE_DEGRADED = Counter(
     "KB 检索 dense 通道整体降级次数(embedding 不可用/预算超限,退化纯词面)",
     registry=registry,
 )
+KB_SEARCH_CACHE_HITS = Counter(
+    "kb_search_cache_hits_total",
+    "KB 检索缓存命中次数,layer=query_vector|result",
+    ["layer"],
+    registry=registry,
+)
 KB_SEARCH_RERANK_DEGRADED = Counter(
     "kb_search_rerank_degraded_total",
     "KB 检索 rerank 降级为纯 RRF 次数,reason=config|call",

@@ -44,6 +44,7 @@ from nicekit.domain.kb_media import (
     KnowledgeMediaReference,
     NormalizedBBox,
 )
+from nicekit.kb import search_cache
 from nicekit.kb.effective_scope import (
     active_knowledge_base_filter,
     effective_chunk_filter,
@@ -65,6 +66,7 @@ from nicekit.kb.graph_search import (
     graph_recall_candidates,
 )
 from nicekit.kb.metrics import (
+    KB_SEARCH_CACHE_HITS,
     KB_SEARCH_DENSE_DEGRADED,
     KB_SEARCH_EMPTY,
     KB_SEARCH_REFUSALS,
@@ -422,6 +424,31 @@ def _plain_chunk_hit(org_id: UUID, chunk: KbChunk, *, stale: bool) -> SearchHit:
             **_stale_flag(stale),
         },
     )
+
+
+async def _embed_query_cached(embedder: Any, org_id: UUID, query: str) -> list[float]:
+    """生成 query 向量,命中缓存则跳过外部嵌入调用。
+
+    向量是 (文本, 模型, 维度) 的确定映射,与知识库内容无关,所以缓存可以放很久;
+    模型与维度已进缓存键,换模型不需要清理。缓存未命中或 redis 不可用时,行为与
+    加缓存之前完全一致。
+    """
+    settings = get_settings()
+    label = str(embedder.label)
+    provider, _, model = label.partition(":")
+    dim = settings.kb_embedding_dim
+    ttl = settings.kb_query_vector_cache_ttl_seconds
+    key = search_cache.query_vector_key(
+        org_id, provider=provider, model=model, dim=dim, query=query
+    )
+    if ttl > 0:
+        cached = await search_cache.load_vector(key, dim=dim)
+        if cached is not None:
+            KB_SEARCH_CACHE_HITS.labels(layer="query_vector").inc()
+            return cached
+    [qvec] = await embedder.embed([query], org_id=org_id, task="kb.search.embedding")
+    await search_cache.store_vector(key, qvec, ttl_seconds=ttl)
+    return qvec
 
 
 async def _graph_path_labels(
@@ -2477,7 +2504,90 @@ async def search_kb(
     graph_enabled: bool | None = None,
     graph_max_hops: int | None = None,
 ) -> list[SearchHit]:
-    """Run all enabled recall channels through one namespaced RRF."""
+    """Run all enabled recall channels through one namespaced RRF.
+
+    结果缓存包在最外层:缓存键压了当前可见 (kb, active_snapshot) 集合的指纹,
+    发布新快照或可见范围变化会立刻换键,TTL 只是兜底上限。注入了自定义
+    reranker / dual-read 目标时一律不缓存——那些对象的行为无法进键,缓存会串。
+    命中缓存不影响调用方的快照租约复核:那道校验在 search_kb 之外(见
+    api/v1/kb.py 与 agent/builtin_tools.py),缓存过的结果同样要过。
+    """
+    settings = get_settings()
+    ttl = settings.kb_search_cache_ttl_seconds
+    cacheable = (
+        ttl > 0
+        and reranker is _DEFAULT_RERANKER
+        and dual_read_target is _DEFAULT_DUAL_READ
+        and len(query) <= 1000
+        and _has_search_terms(query.strip())
+        and kb_ids != []
+    )
+    if not cacheable:
+        return await _search_kb_uncached(
+            session,
+            org_id,
+            query,
+            top_k=top_k,
+            kb_ids=kb_ids,
+            embedder=embedder,
+            reranker=reranker,
+            dual_read_target=dual_read_target,
+            structured_filters=structured_filters,
+            graph_enabled=graph_enabled,
+            graph_max_hops=graph_max_hops,
+        )
+
+    key = search_cache.search_result_key(
+        org_id,
+        query=query.strip(),
+        top_k=top_k,
+        kb_ids=kb_ids,
+        structured=structured_filters,
+        graph_enabled=(
+            settings.kb_graph_search_enabled if graph_enabled is None else graph_enabled
+        ),
+        graph_max_hops=(
+            settings.kb_graph_max_hops if graph_max_hops is None else graph_max_hops
+        ),
+        rerank_enabled=settings.rerank_enabled,
+        embedding_label=str(getattr(embedder, "label", "")) if embedder else "",
+        snapshot_fingerprint=await search_cache.active_snapshot_fingerprint(session, kb_ids),
+    )
+    cached = await search_cache.load_hits(key)
+    if cached is not None:
+        KB_SEARCH_CACHE_HITS.labels(layer="result").inc()
+        return cached
+    hits = await _search_kb_uncached(
+        session,
+        org_id,
+        query,
+        top_k=top_k,
+        kb_ids=kb_ids,
+        embedder=embedder,
+        reranker=reranker,
+        dual_read_target=dual_read_target,
+        structured_filters=structured_filters,
+        graph_enabled=graph_enabled,
+        graph_max_hops=graph_max_hops,
+    )
+    await search_cache.store_hits(key, hits, ttl_seconds=ttl)
+    return hits
+
+
+async def _search_kb_uncached(
+    session: AsyncSession,
+    org_id: UUID,
+    query: str,
+    *,
+    top_k: int = 10,
+    kb_ids: list[UUID] | None = None,
+    embedder: EmbeddingService | None = None,
+    reranker: Reranker | None | object = _DEFAULT_RERANKER,
+    dual_read_target: DualReadTarget | None | object = _DEFAULT_DUAL_READ,
+    structured_filters: StructuredSearchQuery | None = None,
+    graph_enabled: bool | None = None,
+    graph_max_hops: int | None = None,
+) -> list[SearchHit]:
     _validate_top_k(top_k)
     if len(query) > 1000:
         raise ValueError("query must not exceed 1000 characters")
@@ -2592,7 +2702,7 @@ async def search_kb(
     dense_model_rankings: list[list[tuple[KbChunk, float]]] = []
     if embedder is not None:
         try:
-            [qvec] = await embedder.embed([query], org_id=org_id, task="kb.search.embedding")
+            qvec = await _embed_query_cached(embedder, org_id, query)
             label = embedder.label
             fingerprint = getattr(embedder, "fingerprint", None)
             if fingerprint is None:
