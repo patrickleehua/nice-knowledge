@@ -78,3 +78,6 @@ next-env.d.ts
 
 # Claude Code agent 临时工作树
 .claude/worktrees/
+
+# celery beat 的本地调度状态(运行时产物,每次起服务都会写)
+apps/demo/backend/celerybeat-schedule*

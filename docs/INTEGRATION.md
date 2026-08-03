@@ -186,7 +186,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nicekit.api.deps import Principal
 from nicekit.core.db import get_session_factory
 from nicekit.models.tenancy import User
-from nicekit.tenancy import ensure_org, register_roles, register_write_roles
+from nicekit.tenancy import ensure_principal, register_roles, register_write_roles
 from nicekit.tenancy.mapping import subject_uuid, tenant_uuid
 
 # ---------------------------------------------------------------------------
@@ -211,24 +211,9 @@ ROLE_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # 2) 影子行垫入:agent 权限三表的外键需要 organizations + users 里有行
 # ---------------------------------------------------------------------------
-# SDK 只提供 ensure_org;users 侧目前没有对应 helper,自己写一个同形的。
-async def ensure_user(
-    session: AsyncSession, user_id: UUID, *, email: str | None = None, full_name: str | None = None
-) -> UUID:
-    """幂等垫一行 users。不 commit,由调用方决定事务边界。"""
-    await session.execute(
-        pg_insert(User)
-        .values(
-            id=user_id,
-            # email 有唯一约束:用宿主的真实邮箱,或用一个不可投递的确定性占位
-            email=email or f"{user_id}@users.noreply.invalid",
-            password_hash="!external",   # 永不用于登录:auth router 没挂载
-            full_name=full_name or f"user-{user_id.hex[:8]}",
-            is_active=True,
-        )
-        .on_conflict_do_nothing(index_elements=[User.id])
-    )
-    return user_id
+# SDK 提供 ensure_principal 一次垫齐 org 与 user 两侧(agent 权限三表对
+# organizations 与 users 都有外键,只垫一半会在"第一次改权限偏好"时才 500)。
+# 想分开控制也可以单独用 ensure_org / ensure_user。
 
 
 # 进程内已垫过的 (org, user);避免每个请求都打一次库
@@ -247,8 +232,13 @@ async def provision(
     if (org_id, user_id) in _provisioned:
         return
     async with get_session_factory()() as session:
-        await ensure_org(session, org_id, name=org_name, slug=org_slug)
-        await ensure_user(session, user_id, email=email, full_name=full_name)
+        # ensure_principal = ensure_org + ensure_user。用它而不是分开调:
+        # 两侧都有外键,只垫一半的报错要等到用户第一次改权限偏好才出现。
+        await ensure_principal(
+            session, org_id, user_id,
+            org_name=org_name, org_slug=org_slug,
+            user_email=email, user_full_name=full_name,
+        )
         await session.commit()      # 这里 commit 是刻意的:独立短事务,不挂在请求事务上
     _provisioned.add((org_id, user_id))
 
@@ -532,7 +522,10 @@ async def seed() -> None:
     install_default_ports()
     async with get_session_factory()() as session:
         report = await bootstrap_platform(session, single_tenant=True)
-        print(report.as_dict())      # {"single_tenant_org": "68bfb6c1-...", ...}
+        print(report.as_dict())
+        # {"single_tenant_org": "73978095-…", "single_tenant_subject": "e81471a3-…", …}
+        # 两行都垫了:agent 权限三表对 organizations 与 users 都有外键。
+        # 想自己拿这个操作者 id:nicekit.api.deps.single_tenant_subject_id()
 
 
 if __name__ == "__main__":
@@ -545,7 +538,7 @@ if __name__ == "__main__":
 
 ```python
 from nicekit.api.deps import SINGLE_TENANT_ORG_ID
-# 68bfb6c1-70e0-56a3-a73c-13bf8d3b5695(= tenant_uuid("__single_tenant__"),固定值)
+# 73978095-c3be-508a-88b0-c79c032526f5(= derive_uuid("single_tenant", namespace=NAMESPACE_RESERVED),固定值)
 ```
 
 `platform_org_id`(`00000000-...-0001`)的语义是**"这份数据对所有组织可见"**:
@@ -644,7 +637,7 @@ session = org_session(get_session_factory(), org_id)   # 调用方负责 close
 症状:KB、chat 一切正常,直到某个用户改 agent 权限偏好或第一次授权工具 → 500,
 日志里 `ForeignKeyViolation: violates foreign key constraint
 "agent_permission_preferences_org_id_fkey"`(或 `..._user_id_fkey`)。
-解法见 §3.3。**注意 `ensure_org` 只解决一半** —— `user_id` 那半 SDK 没提供 helper,
+解法见 §3.3。**注意只垫 org 只解决一半** —— `user_id` 那半用 `ensure_user`,
 照抄 §3.1 的 `ensure_user`。
 
 ### 6.2 两套身份并存

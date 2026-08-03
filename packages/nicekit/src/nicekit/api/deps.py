@@ -177,6 +177,16 @@ def require_write_role():
     return _checker
 
 
+def single_tenant_subject_id(org_id: UUID | None = None) -> UUID:
+    """单租户模式的默认操作者 UUID(与 :func:`single_tenant_resolver` 同源)。
+
+    agent 权限三表有指向 ``users`` 的外键,宿主要在 seed 里预先垫这行,就必须
+    知道这个 id。不导出的话只能照抄 SDK 内部的派生表达式 —— 一处会在 SDK 改
+    实现时静默失配的耦合(实测踩过:demo 只好显式传 subject_id 绕开)。
+    """
+    return subject_uuid(f"single-tenant:{org_id or SINGLE_TENANT_ORG_ID}")
+
+
 def single_tenant_resolver(
     *,
     org_id: UUID | None = None,
@@ -195,9 +205,10 @@ def single_tenant_resolver(
     全部知识会立刻对新租户可见——那是一次静默的数据泄漏,且难以回溯。
     独立 org 则只是一个普通租户,升级多租户时什么都不用改。
 
-    首次启动需要让这个 org 在库里存在(3 张 agent 权限表有外键):
-    ``bootstrap_platform(session, single_tenant=True)`` 或自己调
-    ``tenancy.orgs.ensure_org(session, SINGLE_TENANT_ORG_ID)``。
+    首次启动要让这个 org **与默认操作者**都在库里存在(agent 权限三表对
+    ``organizations`` 与 ``users`` 都有外键):
+    ``bootstrap_platform(session, single_tenant=True)`` 会一并垫好;手动做则是
+    ``ensure_principal(session, SINGLE_TENANT_ORG_ID, single_tenant_subject_id())``。
 
     ``role_of``/``subject_of`` 可选:网关把已认证用户放在请求头里时,用它们
     把用户带进来,这样审计与长期记忆才分得清人;不传则所有请求视为同一主体。
@@ -207,7 +218,7 @@ def single_tenant_resolver(
     """
     fixed_org = org_id or SINGLE_TENANT_ORG_ID
     # 固定主体:从 org 确定性派生,保证多次启动稳定(审计里能对得上同一个人)
-    fixed_subject = subject_id or subject_uuid(f"single-tenant:{fixed_org}")
+    fixed_subject = subject_id or single_tenant_subject_id(fixed_org)
 
     async def _resolve(request: Request) -> Principal:
         return Principal(

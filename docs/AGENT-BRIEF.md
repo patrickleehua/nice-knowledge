@@ -21,7 +21,8 @@ bridge 与 single **必须** `default_routers(exclude=AUTH_ROUTER_NAMES)`,否则
 
 ```python
 from nicekit.api.deps import (
-    SINGLE_TENANT_ORG_ID,     # UUID 常量 = 68bfb6c1-70e0-56a3-a73c-13bf8d3b5695
+    SINGLE_TENANT_ORG_ID,     # UUID 常量 = 73978095-c3be-508a-88b0-c79c032526f5
+    single_tenant_subject_id, # (org_id=None) -> UUID:单租户默认操作者;seed 垫 users 行要用它
     OrgContext,               # frozen dataclass(user_id: UUID, org_id: UUID, role: str)
     Principal,                # 就是 OrgContext(Principal is OrgContext -> True)
     PrincipalResolver,        # Protocol: async def __call__(self, request: Request) -> Principal
@@ -52,8 +53,10 @@ resolver 实现约定:认证失败抛 `HTTPException(401)`,越权抛 403,**不�
 
 ```python
 from nicekit.tenancy import (                     # 一处 import,推荐
-    ensure_org, register_roles, register_write_roles, subject_uuid, tenant_uuid, write_roles)
-from nicekit.tenancy.mapping import NAMESPACE_SUBJECT, NAMESPACE_TENANT, derive_uuid
+    ensure_org, ensure_principal, ensure_user,     # ensure_principal = org + user,优先用它
+    register_roles, register_write_roles, subject_uuid, tenant_uuid, write_roles)
+from nicekit.tenancy.mapping import (
+    NAMESPACE_RESERVED, NAMESPACE_SUBJECT, NAMESPACE_TENANT, derive_uuid)
 from nicekit.tenancy.roles import (PLATFORM_ADMIN, ORG_ADMIN, MEMBER,
     all_roles, assignable_roles, reset_registered_roles, reset_write_roles)
 
@@ -123,7 +126,8 @@ def create_app(settings: Settings | None = None, *,
 async def bootstrap_platform(session: AsyncSession, *, org_id: UUID | None = None,
     entity_type_specs: list[dict] | None = None, seed_agent_card: bool = True,
     single_tenant: bool = False) -> BootstrapReport: ...
-    # single_tenant=True:ensure_org(SINGLE_TENANT_ORG_ID) 并把 seed 归属改到它
+    # single_tenant=True:一并垫 org 与默认操作者(ensure_principal)并把 seed 归属改到它;
+    # 报告里回传 single_tenant_org / single_tenant_subject
 
 def install_default_ports(*, force: bool = False) -> None: ...
 ```
@@ -235,7 +239,7 @@ def _restore_resolver():
 
 ## 5. 可复制代码
 
-### 5.1 `ensure_user`(SDK 未提供,bridge 必备)
+### 5.1 影子行垫入(SDK 已提供 `ensure_principal` / `ensure_org` / `ensure_user`)
 
 ```python
 from uuid import UUID
@@ -415,7 +419,7 @@ def build_app() -> FastAPI:
 | RLS 策略表达式 | `org_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid` |
 | 未设上下文时 | 策略恒假(fail-closed) |
 | `platform_org_id` | `00000000-0000-0000-0000-000000000001`(迁移已 seed) |
-| `SINGLE_TENANT_ORG_ID` | `68bfb6c1-70e0-56a3-a73c-13bf8d3b5695`(**迁移未 seed**,需 `single_tenant=True`) |
+| `SINGLE_TENANT_ORG_ID` | `73978095-c3be-508a-88b0-c79c032526f5`(**迁移未 seed**,需 `single_tenant=True`) |
 | 全量端点 / 摘身份后 | 182 / 173 |
 | `/api/v1/admin/*` | 整个 router 要求 `platform_admin` |
 | KB 跨组织分享 | `POST /api/v1/kb/bases/{kb_id}/shares`,body `{"grantee_org_slug": …}` —— 靠 `organizations.slug` 找人;`ensure_org` 不传 slug 会得到 `org-<hex12>` 占位 |

@@ -75,11 +75,16 @@ class BootstrapReport:
     agent_cards: int = 0
     #: 单租户模式下实际使用的分区键(非单租户为 None)
     single_tenant_org: UUID | None = None
+    #: 单租户模式下垫出的默认操作者(agent 权限表的 users 外键需要它)
+    single_tenant_subject: UUID | None = None
     prompt_resource_issues: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
             "single_tenant_org": str(self.single_tenant_org) if self.single_tenant_org else None,
+            "single_tenant_subject": (
+                str(self.single_tenant_subject) if self.single_tenant_subject else None
+            ),
             "entity_types": self.entity_types,
             "kb_prompts": self.kb_prompts,
             "kb_answer_route": self.kb_answer_route,
@@ -148,9 +153,10 @@ async def bootstrap_platform(
     - ``entity_type_specs``:实体类型定义,缺省为 SDK 内置(仅 ``concept`` 兜底);
       宿主传自己的行业类型即可(SDK 不内置任何领域词表);
     - ``seed_agent_card``:是否 seed 中性默认 agent 卡;
-    - ``single_tenant``:单租户模式下把 ``SINGLE_TENANT_ORG_ID`` 垫进
-      ``organizations``(3 张 agent 权限表有外键),并把 seed 归属改到它 ——
-      单租户的数据是普通租户数据,不该落在语义为"对所有组织可见"的平台 org 下。
+    - ``single_tenant``:单租户模式下把 ``SINGLE_TENANT_ORG_ID`` 与默认操作者
+      一并垫进 ``organizations`` / ``users``(agent 权限三表对两者都有外键),
+      并把 seed 归属改到它 —— 单租户的数据是普通租户数据,不该落在语义为
+      "对所有组织可见"的平台 org 下。
 
     带 RLS 的表(kb_entity_types / agent_cards)由各 ensure_* 自行 SET LOCAL
     org 上下文,所以本函数用普通会话即可;末尾统一 commit 一次。
@@ -165,12 +171,23 @@ async def bootstrap_platform(
 
     report = BootstrapReport()
     if single_tenant:
-        from nicekit.api.deps import SINGLE_TENANT_ORG_ID
-        from nicekit.tenancy.orgs import ensure_org
+        from nicekit.api.deps import SINGLE_TENANT_ORG_ID, single_tenant_subject_id
+        from nicekit.tenancy.orgs import ensure_principal
 
         target_org = org_id or SINGLE_TENANT_ORG_ID
-        await ensure_org(session, target_org, name="Single Tenant", slug="single-tenant")
+        # org 与默认操作者都要垫:agent 权限三表对 organizations 与 users 都有
+        # 外键,只垫一半的表现是"一切正常,直到第一次改权限偏好才 500"。
+        subject = single_tenant_subject_id(target_org)
+        await ensure_principal(
+            session,
+            target_org,
+            subject,
+            org_name="Single Tenant",
+            org_slug="single-tenant",
+            user_full_name="Single Tenant Operator",
+        )
         report.single_tenant_org = target_org
+        report.single_tenant_subject = subject
     else:
         target_org = org_id or get_settings().platform_org_id
 
