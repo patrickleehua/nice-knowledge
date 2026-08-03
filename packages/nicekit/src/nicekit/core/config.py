@@ -264,12 +264,21 @@ class KbSettings(_DomainSettings):
     # 超过该阈值的向量命中丢弃(检索为空如实返回,不给乱码查询编造 top-k 最近邻)。
     # PostgreSQL FTS sparse 通道不受该距离阈值影响。
     kb_vector_max_distance: float = 0.62
-    # R5 graph recall stays opt-in until the multi-hop evaluation gain is >= 5pt.
     # 口径澄清(2026-07-23):search.py manifest 里的 enable_gate_min_gain_points:
     # 5.0 只是文档性声明(参与 config_fingerprint,不可改动),代码中没有自动
-    # gain 门控。真正的门 = 本开关默认 False + 评测脚本 --compare-graph 实测
+    # gain 门控。原计划的门 = 本开关默认 False + 评测脚本 --compare-graph 实测
     # 增益 >= 5pt 后由人工改为 True。
-    kb_graph_search_enabled: bool = False
+    #
+    # 2026-08-03 转为默认开启。两点依据:
+    # 1) 该门槛此前**不可执行**——`--compare-graph` 评测脚本从未实现,全仓库只有
+    #    上面这行注释提到它,开关因此被无限期锁在 False;
+    # 2) 更关键的是,在此之前图谱这一路是**空转**的:唯一的结果恢复路径依赖检索
+    #    卡片,而普通文档只产出 entity_mention 与关系事实(按设计不建卡),于是
+    #    强制开启与关闭结果完全一致。也就是说旧的 False 并非"评测未达标",而是
+    #    "达标与否无从谈起"。断链修复(证据切片回落 + 种子析取匹配)后已真库验证
+    #    产生增益:跨文档邻居切片可被带回,且关联路径进入答问上下文。
+    # 建立多跳评测集后仍应补测 Recall@K / nDCG@K,用数据复核这个默认值。
+    kb_graph_search_enabled: bool = True
     kb_graph_max_hops: int = Field(default=2, ge=1, le=2)
 
     # KB 健康巡检(监控双轨之二:系统内主动告警):间隔秒,0 = 关;
