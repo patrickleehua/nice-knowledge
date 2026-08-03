@@ -1,7 +1,10 @@
-# nicekit demo 前端
+# Nice Knowledge 前端
 
-nicekit(多租户 Agent + 知识库平台 SDK)的可视化测试台。裁剪自 TravelFlow AI
-的 Next.js 工作台,删掉全部旅游业务面,只保留 SDK 能力对应的界面。
+**Nice Knowledge** 是基于 **NiceKit** 搭建的示例知识工作台。前端使用 Next.js,
+用于演示多租户工作台、知识库、Agent 运行时、权限治理和平台管理端。
+
+Logo 使用仓库品牌资产 `images/nicekit.png`,前端运行时引用路径为
+`/images/nicekit.png`。
 
 ## 起步
 
@@ -12,7 +15,7 @@ pnpm install
 # 2) 环境变量(可选,默认就指向 8020)
 cp .env.example .env.local
 
-# 3) 起 demo 后端(另开一个终端)
+# 3) 起 Nice Knowledge 后端(另开一个终端)
 cd ../backend
 cp .env.example .env
 uv run --package nicekit-demo-backend python -m demo_backend.seed
@@ -54,7 +57,7 @@ pnpm test            # node --test(*.test.mjs) + vitest(*.component.test.tsx)
 
 ## 给宿主的扩展点
 
-前端这一层最重要的扩展点是**工具结果渲染器注册表**
+Nice Knowledge 前端这一层最重要的扩展点是**工具结果渲染器注册表**
 (`src/components/agent/result-renderers.tsx`)。SDK 不认识宿主的业务工具,
 也不该内置业务卡片,因此按工具名注册渲染器:
 

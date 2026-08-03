@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -68,13 +69,18 @@ function LoginForm() {
     <Card className="w-full max-w-sm">
       <CardHeader>
         <div className="mb-2 flex items-center gap-2">
-          <span className="flex size-8 items-center justify-center rounded-md bg-primary text-base font-bold text-primary-foreground">
-            N
-          </span>
-          <span className="text-lg font-semibold">nicekit demo</span>
+          <Image
+            src="/images/nicekit.png"
+            alt="NiceKit"
+            width={36}
+            height={36}
+            priority
+            className="size-9 rounded-md object-cover"
+          />
+          <span className="text-lg font-semibold">Nice Knowledge</span>
         </div>
         <CardTitle className="text-base font-normal text-muted-foreground">
-          登录多租户 Agent + 知识库工作台
+          登录基于 NiceKit 构建的知识工作台
         </CardTitle>
       </CardHeader>
       <CardContent>

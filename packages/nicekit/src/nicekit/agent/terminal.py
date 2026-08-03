@@ -19,6 +19,7 @@ from sqlmodel import select
 from nicekit.agent.run_inputs import queue_event_payload
 from nicekit.domain.agent_plan import mark_plan_interrupted
 from nicekit.models.chat import (
+    ChatEvent,
     ChatMessage,
     ChatRunInput,
     ChatRunInputStatus,
@@ -88,6 +89,7 @@ async def terminalize_agent_run(
     reason: str,
     cancellable_resources: tuple[str, ...] = (),
     add_visible_message: bool = True,
+    add_terminal_event: bool = False,
 ) -> AgentTerminalization:
     """Commit the first terminal outcome and make later attempts no-ops.
 
@@ -166,6 +168,35 @@ async def terminalize_agent_run(
     chat.active_run_id = None
     chat.cancel_requested = False
     session.add(chat)
+
+    if add_terminal_event:
+        next_event_seq = (
+            (
+                await session.execute(
+                    select(func.max(ChatEvent.seq)).where(
+                        ChatEvent.session_id == chat_session_id,
+                        ChatEvent.run_id == run_id,
+                    )
+                )
+            ).scalar()
+            or 0
+        ) + 1
+        done_reason = "cancelled" if stop == "cancelled" else "error"
+        session.add(
+            ChatEvent(
+                org_id=chat.org_id,
+                session_id=chat.id,
+                run_id=run_id,
+                seq=next_event_seq,
+                payload={
+                    "type": "turn.done",
+                    "reason": done_reason,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "message": terminal_reason,
+                    "seq": next_event_seq,
+                },
+            )
+        )
 
     if add_visible_message:
         next_sequence = (

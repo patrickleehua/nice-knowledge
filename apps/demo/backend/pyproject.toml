@@ -1,7 +1,7 @@
 [project]
 name = "nicekit-demo-backend"
 version = "0.1.0"
-description = "nicekit SDK 的最小宿主示例:app_factory 组装 + 四个扩展点演示"
+description = "Nice Knowledge:基于 NiceKit SDK 的最小宿主示例"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

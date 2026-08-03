@@ -48,7 +48,7 @@ def build_app() -> FastAPI:
         routers=default_routers(),
         tool_registry=host_tools,
         startup_hooks=(_log_ready,),
-        title="nicekit demo",
+        title="Nice Knowledge",
     )
 
 

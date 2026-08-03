@@ -23,7 +23,7 @@ from nicekit.agent.tools import (
     require_role,
     set_role_checker,
 )
-from nicekit.models.chat import ChatRunInputStatus, ChatSession
+from nicekit.models.chat import ChatEvent, ChatMessage, ChatRunInputStatus, ChatSession
 
 
 def _ctx(role: str) -> ToolContext:
@@ -258,6 +258,42 @@ async def test_finalizer_failure_does_not_block_session_convergence() -> None:
 
     assert result.committed is True
     assert chat.active_run_id is None
+
+
+async def test_terminalization_can_persist_terminal_event_for_offline_recovery() -> None:
+    run_id = uuid4()
+    chat = ChatSession(
+        id=uuid4(),
+        org_id=uuid4(),
+        user_id=uuid4(),
+        agent_card_id=uuid4(),
+        active_run_id=run_id,
+    )
+    session = _Session(
+        _Result(one=chat),
+        _Result(rows=[]),
+        _Result(scalar=2),
+        _Result(scalar=4),
+    )
+
+    result = await terminalize_agent_run(
+        session,  # type: ignore[arg-type]
+        chat_session_id=chat.id,
+        run_id=run_id,
+        stop="error",
+        reason="任务超时未完成",
+        add_terminal_event=True,
+    )
+
+    event = next(row for row in session.added if isinstance(row, ChatEvent))
+    message = next(row for row in session.added if isinstance(row, ChatMessage))
+    assert result.committed is True
+    assert event.seq == 3
+    assert event.payload["seq"] == 3
+    assert event.payload["type"] == "turn.done"
+    assert event.payload["reason"] == "error"
+    assert event.payload["message"] == "任务超时未完成"
+    assert message.sequence == 5
 
 
 async def test_terminalization_is_a_noop_when_the_run_already_converged() -> None:

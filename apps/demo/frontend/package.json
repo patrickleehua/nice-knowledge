@@ -1,6 +1,7 @@
 {
   "name": "nicekit-demo-frontend",
   "version": "0.1.0",
+  "description": "Nice Knowledge: a demo workspace built with NiceKit",
   "private": true,
   "scripts": {
     "dev": "next dev",

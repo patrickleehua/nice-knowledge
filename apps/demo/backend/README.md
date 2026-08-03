@@ -1,7 +1,8 @@
-# nicekit demo 后端
+# Nice Knowledge 后端
 
-用 `nicekit.runtime.app_factory.create_app()` 组装出来的最小宿主。既是可运行的
-demo,也是"怎么用这个 SDK"的活文档 —— 四个扩展点各有一个可读的最小实现。
+**Nice Knowledge** 是用 `nicekit.runtime.app_factory.create_app()` 组装出来的
+NiceKit 示例宿主。它既是可运行的 demo,也是"怎么用这个 SDK"的活文档:
+四个扩展点各有一个可读的最小实现。
 
 ## 目录
 
@@ -73,7 +74,7 @@ beat schedule 由 `nicekit.operations.schedules` 的注册表动态构建;宿主
 周期任务 `register_system_schedule(...)` 后即自动进 beat 与运维诊断面板。
 inline 模式下这些周期任务由 API 进程的 lifespan 常驻循环兜底,两种模式不会双跑。
 
-## 演示的四个扩展点
+## Nice Knowledge 演示的四个扩展点
 
 | 扩展点 | 示例 | 位置 |
 |---|---|---|
@@ -82,7 +83,7 @@ inline 模式下这些周期任务由 API 进程的 lifespan 常驻循环兜底,
 | `ContextProvider` | `demo_workspace`(每轮注入"此刻工作区状态",超预算整段丢弃) | `extensions.py` |
 | `ResourceResolver` | `product_scope`(把 `product_id` 参数解析成作用域根供权限层判定) | `extensions.py` |
 
-还有更多扩展点没在 demo 里展开,协议都在各子包的 `ports.py` / 对应模块:
+还有更多扩展点没在 Nice Knowledge 里展开,协议都在各子包的 `ports.py` / 对应模块:
 `ReferenceScanner`(KB purge 前的外部引用计数)、`TraceSink`/`UsageSink`
 (LLM 计量落库)、`Notifier`(通知)、`RecoverableTask`(任务恢复)、
 `IncidentRecorder`(运维事件)、prompt 资源多 root 叠加、能力槽位注册、

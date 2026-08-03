@@ -261,6 +261,7 @@ class AgentRunRecovery:
                 run_id=chat.active_run_id,
                 stop="error",
                 reason=error,
+                add_terminal_event=True,
             )
             if not terminal.committed:
                 continue

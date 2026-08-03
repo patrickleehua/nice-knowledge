@@ -1,6 +1,7 @@
 "use client";
 
 import { LogOut, Menu, Moon, Sun, type LucideIcon } from "lucide-react";
+import Image from "next/image";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -59,11 +60,16 @@ export function ShellHeader({
 function Brand() {
   return (
     <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
-      <span className="flex size-7 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-        N
-      </span>
+      <Image
+        src="/images/nicekit.png"
+        alt="NiceKit"
+        width={32}
+        height={32}
+        priority
+        className="size-8 rounded-md object-cover"
+      />
       <span className="text-sm font-semibold text-sidebar-foreground">
-        nicekit demo
+        Nice Knowledge
       </span>
     </div>
   );
@@ -193,7 +199,7 @@ export function AppShell({
         >
           <SheetTitle className="sr-only">主导航</SheetTitle>
           <SheetDescription className="sr-only">
-            nicekit demo 功能导航
+            Nice Knowledge 功能导航
           </SheetDescription>
           <Brand />
           <ShellNav
