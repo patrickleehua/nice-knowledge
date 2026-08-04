@@ -1,7 +1,17 @@
 # AGENT-BRIEF:nicekit 租户接入(AI 编码助手专用)
 
-面向人的完整版:`docs/INTEGRATION.md`。本文只给可直接照抄的结构化事实。
-所有签名摘自工作区实际代码,已逐条 import 验证。
+本文只给**可直接照抄的结构化事实**:import 路径、函数签名、执行步骤、反模式清单。
+所有签名摘自实际代码,已逐条 import 验证。**照抄这里,不要凭记忆写 nicekit 的 API。**
+
+| 你要做的事 | 去哪 |
+|---|---|
+| 把 nicekit 接进宿主的身份体系 | **本文**(面向人的完整版:[INTEGRATION.md](INTEGRATION.md)) |
+| 注册自定义工具 / 实体类型 / ContextProvider 等扩展点 | [SDK-GUIDE.md §4](SDK-GUIDE.md#4-扩展点全清单) |
+| 查表结构、RLS 策略、某张表用不用得到 | [DATA-MODEL.md](DATA-MODEL.md) |
+| 在 nice-knowledge 仓库本身里改代码 | [../AGENTS.md](../AGENTS.md) |
+
+安装:`pip install nicekit`(Python 3.13+)。运行前必须有 PostgreSQL(带 `pgvector` /
+`pg_trgm` / `zhparser` / `pgcrypto`)、Redis、S3 兼容存储 —— 光装包跑不起来。
 
 ## 1. 选模式
 
@@ -107,7 +117,10 @@ kb_entity_types, kb_media, members, admin, admin_mcp, agent_permissions,
 chat, memory, icron, notifications, media
 ```
 
-- `default_routers()` → 18 router / 182 端点;`exclude=AUTH_ROUTER_NAMES` → 16 / 173。
+- `default_routers()` → 18 router / **182 条路径 / 228 个端点操作**;
+  `exclude=AUTH_ROUTER_NAMES` → 16 router / **173 条路径 / 217 个端点操作**。
+  (`len(app.openapi()["paths"])` 数的是路径,同路径不同方法只算一条;数操作要遍历每条路径下的 method。)
+- `_ROUTER_GROUPS = {"admin": ("admin", "admin_mcp")}`:`exclude=("admin",)` 会连带摘掉 `admin_mcp`。
 - `exclude` 里有未知名字 → `ValueError` 并列出全部合法值(不会静默忽略)。
 
 ### 2.4 `nicekit.runtime`
@@ -162,13 +175,21 @@ def op_enable_org_rls(op, table_name: str) -> None: ...    # ENABLE + FORCE + or
 
 | # | 做什么 | 验证 | 失败怎么办 |
 |---|---|---|---|
-| 1 | `pyproject.toml` 加 `dependencies = ["nicekit"]`(单仓内加 `[tool.uv.sources] nicekit = { workspace = true }`) | `uv run --package <你的包> python -c "import nicekit"` | 检查 uv workspace `members` 是否含你的包路径 |
-| 2 | `docker compose up -d`;`cd packages/nicekit && uv run --package nicekit alembic upgrade head` | `alembic current` 返回单个 head | `MIGRATION_DATABASE_URL` 未配;或用了官方 postgres 镜像(必须用 `deploy/` 定制镜像,预装 pgvector/pg_trgm/zhparser/pgcrypto) |
+| 1 | `pip install nicekit`(或 `uv add nicekit`);`pyproject.toml` 写 `dependencies = ["nicekit>=0.1.0"]`。**在 nice-knowledge 单仓内**才加 `[tool.uv.sources] nicekit = { workspace = true }` | `python -c "import nicekit; print(nicekit.__version__)"` | 单仓内报错先查 uv workspace `members` 是否含你的包路径 |
+| 2 | 起基础设施;写 `alembic.ini`(见下)后 `alembic upgrade head` | `alembic current` 返回单个 head `f4c2a8e19d63` | `MIGRATION_DATABASE_URL` 未配;或用了官方 postgres 镜像(必须预装 pgvector/pg_trgm/zhparser/pgcrypto,本仓库 `deploy/` 有定制镜像) |
 | 3 | 装配,顺序见下方代码块 | `assert uses_builtin_auth() is False` | `RuntimeError: 身份接线自相矛盾` → `exclude` 漏了;顺序写反不报错但是错的(§4.2) |
 | 4 | seed:managed/bridge `await bootstrap_platform(session)`;single 加 `single_tenant=True` | `report.as_dict()` 无异常;single 模式 `single_tenant_org` 非 None | Windows 漏 `use_selector_event_loop_on_windows()` → psycopg `InterfaceError: cannot use the 'ProactorEventLoop'` |
 | 5 | **bridge 必做**:垫影子行 `ensure_org` + `ensure_user`(§5.1)后 `commit` | `PUT /api/v1/agent/permissions/preferences` 返回 200 而非 500 | `ForeignKeyViolation ... agent_permission_preferences_org_id_fkey` / `_user_id_fkey` |
 | 6 | `uv run python run.py`(Windows 必须;Linux 可直接 uvicorn) | `curl -s localhost:8000/api/v1/health` → `{"status":"ok"}` | 见 §4.11 |
 | 7 | 跑 §5.2 自检脚本 | 全 PASS | 按 FAIL 项回到对应步骤 |
+
+步骤 2 的 `alembic.ini`(迁移脚本随 wheel 分发,但 `alembic.ini` 不在包里,自己写一份):
+
+```ini
+[alembic]
+script_location = nicekit:migrations
+# 不写 sqlalchemy.url:env.py 从 Settings.migration_database_url 读
+```
 
 步骤 3 的顺序不可换:
 
@@ -206,10 +227,13 @@ app = build_app()
 `str(None)=="None"` 非空,放过去会让所有缺租户的请求静默共用同一个分区)。但**别指望它兜底** ——
 resolver 里先判空并抛 401/403,否则 `ValueError` 冒到最外层就是 500。
 
-**4.6 不要同时挂 auth router 又注册 resolver**(见 §2.4 表)。也不要"只排 `admin`":
-`admin` 与 `admin_mcp` 是**两个** router,`exclude=("admin",)` 会留下
-`/api/v1/admin/mcp-servers`、`.../status`、`.../{server_id}`、`.../{server_id}/status`、
-`.../{server_id}/test` 五条端点。要摘管理面用 `exclude=(*AUTH_ROUTER_NAMES, "admin", "admin_mcp")`。
+**4.6 不要同时挂 auth router 又注册 resolver**(见 §2.4 表)。
+
+管理面是**两个** router(`admin` 与 `admin_mcp`),但 `_ROUTER_GROUPS` 已把它们编成一组:
+`exclude=("admin",)` 会连带摘掉 `admin_mcp`,不会留下 `/api/v1/admin/mcp-servers` 这类残端点。
+反过来只想摘 MCP 配置面、保留主管理面,用细粒度名字 `exclude=("admin_mcp",)`。
+"只摘主管理面、保留 `admin_mcp`"没有对应写法 —— 分组是刻意的单向收紧,
+因为 `/admin/mcp-servers` 同样是配置面,"以为关了其实开着"是这里最危险的失败模式。
 
 **4.7 不要用 `sys.modules` 打桩或 monkeypatch 内部符号。** 身份切换点只有一个,测试里用它并还原:
 
@@ -221,7 +245,8 @@ def _restore_resolver():
 ```
 
 **4.8 不要用 `app.routes` 数路由。** FastAPI 0.141 起 `include_router` 不展开,
-`app.routes` 里是 `_IncludedRouter`,数出来是 18 而不是 182。用 `app.openapi()["paths"]`。
+`app.routes` 里是 `_IncludedRouter`,数出来是 18 而不是 182。用 `app.openapi()["paths"]`
+(它给的是**路径**数;要数端点操作数得再遍历每条路径下的 HTTP method)。
 
 **4.9 不要在脚本里重复调 `build_app()`。** 宿主模块通常导入时已 `app = build_app()`;
 再调一次会把自定义工具重复并入全局注册表,报 `ToolRegistrationError: duplicate tool names`。
@@ -412,7 +437,10 @@ def build_app() -> FastAPI:
 | 事实 | 值 |
 |---|---|
 | 带 `org_id` 列的表 | 52 |
-| 开 FORCE RLS 的表 | 46(49 条策略 = 46 条 `org_isolation` + 3 条 `platform_read`) |
+| 开 FORCE RLS 的表 | 46 |
+| RLS 策略总数 | **102**:46 `org_isolation` + 16 `shared_knowledge_read` + 4×9 `snapshot_*_scope`(RESTRICTIVE)+ 3 `platform_read` + 1 `grantee_read` |
+| 可见 ≠ 属于我的 org | KB 侧 16 张表有 `shared_knowledge_read`(本 org **或** 平台 org **或** 经 `kb_shares` 被分享)。要判归属就显式比 `org_id`,别靠 RLS 反推 |
+| RESTRICTIVE 策略 | 9 张快照投影表各 4 条,与其他策略是 **AND**,只收紧不放宽(org 对上但快照作用域对不上照样读不到) |
 | `platform_read` 所在表 | `chat_events` / `llm_traces` / `usage_daily`(仅 SELECT) |
 | `org_id` 外键 → `organizations` | 6 张:`agent_approval_policies`、`agent_permission_grants`、`agent_permission_preferences`、`invitations`、`memberships`、`refresh_tokens` |
 | 外键 → `users` | 5 条,分布在上述 3 张 agent 表 + `memberships` + `refresh_tokens` |
@@ -420,7 +448,8 @@ def build_app() -> FastAPI:
 | 未设上下文时 | 策略恒假(fail-closed) |
 | `platform_org_id` | `00000000-0000-0000-0000-000000000001`(迁移已 seed) |
 | `SINGLE_TENANT_ORG_ID` | `73978095-c3be-508a-88b0-c79c032526f5`(**迁移未 seed**,需 `single_tenant=True`) |
-| 全量端点 / 摘身份后 | 182 / 173 |
+| 全量 / 摘身份后(路径数) | 182 / 173 |
+| 全量 / 摘身份后(端点操作数) | 228 / 217 |
 | `/api/v1/admin/*` | 整个 router 要求 `platform_admin` |
 | KB 跨组织分享 | `POST /api/v1/kb/bases/{kb_id}/shares`,body `{"grantee_org_slug": …}` —— 靠 `organizations.slug` 找人;`ensure_org` 不传 slug 会得到 `org-<hex12>` 占位 |
 

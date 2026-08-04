@@ -2,8 +2,9 @@
 
 面向**新项目**:如何用 nicekit 在自己的业务里搭起一个多租户 Agent + 知识库平台。
 
-> 想先跑起来看看?去 `apps/demo/backend/README.md`,那是一个可运行的最小宿主。
-> 想知道这套代码怎么来的?去 `docs/MIGRATION-PLAN.md`。
+> 想先跑起来看看?去 [`apps/demo/backend/README.md`](../apps/demo/backend/README.md),那是一个可运行的最小宿主。
+> 要接进**已有**的租户与认证体系?去 [`docs/INTEGRATION.md`](INTEGRATION.md)。
+> 全部文档的导航在 [`docs/README.md`](README.md)。
 
 ---
 
@@ -18,7 +19,7 @@ nicekit 是**平台框架包**,不是工具库。安装并装配后,你的项目
 | **Agent 运行时** | 多轮工具循环、七轴权限审批、AI 复核员、MCP 客户端、SKILL.md 技能、子 agent 委派、长期记忆、会话目标续跑、上下文压缩、定时任务(到点起一个真实 agent run) |
 | **知识库** | 文档摄入(解析/分块/上下文化/嵌入)、通用实体抽取与审核、快照发布与回滚、四路混合检索(结构化 + 图谱 + 稀疏 + 向量,RRF 融合)、知识图谱、wiki 生成、多媒体入库与审核、提示注入围栏 |
 | **运维** | 健康/就绪探针、Prometheus 指标、服务心跳、provider 连通性探测、孤儿任务恢复、超时清扫、事务性发件箱 |
-| **API** | 约 200 个 REST 端点(认证/成员/管理端/chat SSE/KB 全家/记忆/定时/通知/媒体) |
+| **API** | 18 个 router、**228 个 REST 端点**(182 条路径,同路径不同方法算多个端点)——认证/成员/管理端/chat SSE/KB 全家/记忆/定时/通知/媒体 |
 
 **明确不包含**:任何行业业务逻辑。没有订单、工单、项目、客户这些概念——它们由你定义,通过扩展点接进来。
 
@@ -30,15 +31,25 @@ nicekit 是**平台框架包**,不是工具库。安装并装配后,你的项目
 
 ### 2.1 装依赖
 
+```bash
+pip install nicekit
+# 或
+uv add nicekit
+```
+
 ```toml
 # 你的 pyproject.toml
 [project]
-dependencies = ["nicekit"]
+requires-python = ">=3.13"
+dependencies = ["nicekit>=0.1.0"]
 
-# 本仓库内开发时走 workspace
+# 只有在本仓库(nice-knowledge 单仓)内开发时才走 workspace
 [tool.uv.sources]
 nicekit = { workspace = true }
 ```
+
+> `0.x` 阶段公开 API 未冻结,次版本号可能带不兼容变更。生产环境建议锁到具体版本
+> (`nicekit==0.1.0`),升级前读 [CHANGELOG.md](../CHANGELOG.md)。
 
 ### 2.2 起基础设施
 
@@ -47,11 +58,26 @@ nicekit = { workspace = true }
 
 ### 2.3 建表
 
-```bash
-cd <nicekit 包目录> && uv run alembic upgrade head
+迁移脚本随 wheel 分发(`nicekit/migrations/`),但 `alembic.ini` **不在包里** ——
+它是本仓库的开发配置,`script_location` 指向源码树。装了 pip 包之后自己写一份,
+用 alembic 的包资源语法指向已安装的迁移目录:
+
+```ini
+# 你项目里的 alembic.ini
+[alembic]
+script_location = nicekit:migrations
+# 不用写 sqlalchemy.url:env.py 从 Settings.migration_database_url 读
 ```
 
+```bash
+alembic upgrade head        # 与你的 .env 同目录执行
+```
+
+> 在本仓库内开发则直接用现成的:`cd packages/nicekit && uv run --package nicekit alembic upgrade head`。
+
 迁移会建 64 张表、给 46 张带 `org_id` 的表开 FORCE RLS、创建中文检索配置、seed 平台组织。
+数据库账号要**两个**:`DATABASE_URL`(应用)与 `MIGRATION_DATABASE_URL`(迁移 owner),
+**两个都不能有 `BYPASSRLS`**,否则 FORCE RLS 形同虚设。
 
 ### 2.4 最小宿主
 
@@ -158,28 +184,51 @@ app = create_app(routers=default_routers(), tool_registry=my_tools)
 
 ### 4.2 让权限层看懂你的业务对象:ResourceResolver
 
+`register_resource_resolver` 收的是**一个实现了 `resolve_scope` 的对象**,不是 `(参数名, 函数)`:
+
 ```python
+from collections.abc import Mapping
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from nicekit.agent.permissions.actions import register_resource_resolver
 
-async def resolve_ticket(session, tool_name: str, arguments: dict) -> UUID | None:
-    """把工具参数里的 ticket_id 解析成"作用域根",权限层据此判断跨作用域操作。"""
-    ...
 
-register_resource_resolver("ticket_id", resolve_ticket)
+class TicketResolver:
+    """把工具参数里的 ticket_id 解析成"作用域根",权限层据此判断跨作用域操作。"""
+
+    async def resolve_scope(
+        self, session: AsyncSession, tool_name: str, arguments: Mapping[str, object]
+    ) -> UUID | None:
+        ticket_id = arguments.get("ticket_id")
+        if not isinstance(ticket_id, str):
+            return None          # 不归我管 → 交给下一个 resolver
+        ...
+
+
+register_resource_resolver(TicketResolver())
 ```
 
-配套:`ToolPermissionSpec.creates_scope_root=True` 标记"这个工具会创建新的作用域根"。
+**契约**:按注册顺序询问,第一个返回非 None 的胜出;拿不准或不归自己管**返回 None**;
+判定"这组参数有问题"时抛 `ResourceResolutionError`,让策略层 fail-closed。
+
+配套:`tool_permission(..., creates_scope_root=True)` 标记"这个工具会创建新的作用域根"。
 
 ### 4.3 给 agent 注入业务上下文:ContextProvider
 
 ```python
-from nicekit.agent.service import register_context_provider, ContextBlock, ContextRequest
+from nicekit.agent.service import ContextBlock, ContextRequest, context_provider
 
 @context_provider("ticket_workspace", budget_chars=2500, timeout_seconds=2.0)
 async def derive(session, ctx: ContextRequest) -> ContextBlock | None:
     """每轮对话往 system prompt 注入一段"当前工单状态"。"""
     return ContextBlock(block_id="ticket_workspace", text="...")
 ```
+
+`@context_provider` 是装饰器形态;想自己控制对象生命周期就用
+`register_context_provider(provider)`,provider 需带 `name` / `budget_chars` /
+`timeout_seconds` 三个属性和 `async derive(session, ctx)` 方法。
 
 **三铁律**(SDK 强制):不落新表(每轮从业务真相表派生)、agent 不能写、
 派生失败或超预算就整段丢弃且不阻塞对话。
@@ -215,7 +264,13 @@ PRODUCT_TYPE = {
     "review_policy": "ai",              # auto | ai | human
 }
 
-await bootstrap_platform(session, entity_type_specs=[PRODUCT_TYPE])
+from nicekit.kb.entity_types import DEFAULT_ENTITY_TYPE_SPECS
+
+# entity_type_specs 是**全量覆盖**,不是追加 —— 漏带 DEFAULT_ENTITY_TYPE_SPECS
+# 会把领域无关的 concept 兜底类型一起挤掉。
+await bootstrap_platform(
+    session, entity_type_specs=[*DEFAULT_ENTITY_TYPE_SPECS, PRODUCT_TYPE]
+)
 ```
 
 检索时:

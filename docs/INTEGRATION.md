@@ -138,7 +138,7 @@ myhost/
 name = "myhost"
 version = "0.1.0"
 requires-python = ">=3.13"
-dependencies = ["nicekit"]
+dependencies = ["nicekit>=0.1.0"]   # pip install nicekit / uv add nicekit
 
 [build-system]
 requires = ["hatchling"]
@@ -604,7 +604,7 @@ org_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
 
 **单租户模式下也不要关**,理由三条:
 
-1. 它是"代码漏写 `where org_id = ...`"时的最后一道闸。SDK 有约 200 个端点、数十个后台
+1. 它是"代码漏写 `where org_id = ...`"时的最后一道闸。SDK 有 228 个端点、数十个后台
    扫描器,谁都可能漏;RLS 是唯一不依赖 code review 的兜底。
 2. 关掉 RLS 需要改迁移(`ALTER TABLE ... DISABLE ROW LEVEL SECURITY`),那是一条**不可逆的
    分叉**:以后想接入第二个租户就得逐表补回来,而此时库里已经有一批没有正确 `org_id` 的行。
@@ -756,3 +756,6 @@ curl -s localhost:8000/api/v1/kb/bases                                  # 401(�
 curl -s localhost:8000/openapi.json | python -c "import sys,json;p=json.load(sys.stdin)['paths'];print(len(p));print([k for k in p if '/auth/' in k or '/org/members' in k])"
 # 桥接/单租户:173 与 [];全托管:182 与 9 条身份路由
 ```
+
+> 这里数的是 **openapi 路径数**(同路径不同方法只算一条)。按端点操作数算是
+> 全托管 228 / 摘身份后 217。两个口径都对,别混用。

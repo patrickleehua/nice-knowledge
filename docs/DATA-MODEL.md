@@ -1,15 +1,17 @@
 # NiceKit 数据模型手册
 
-> **对应迁移版本**:`cb3e134da690`(`alembic heads`;链路 `4a6a2d9d8aa4_baseline` → `cb3e134da690_operations`)
+> **对应迁移版本**:`f4c2a8e19d63`(`alembic heads`)。完整链路:
+> `4a6a2d9d8aa4_baseline` → `cb3e134da690_operations` → `d7b1c94f2a30_kb_active_snapshot_fk`
+> → `e3f5a71c8b42_shared_knowledge_read` → `f4c2a8e19d63_snapshot_scope_rls`
 > **核实方式**:本文每一条断言都取自 `packages/nicekit/src/nicekit/models/*.py`、
 > `packages/nicekit/src/nicekit/migrations/**` 或对已迁移库的 `psql` 系统目录查询
 > (`docker exec nice-knowledge-postgres-1 psql -U postgres -d niceknowledge`)。
 > **读者**:接入 SDK 的工程师与 AI 编码助手。目标是看完就知道:**这张表干什么、我要不要管它、
 > 我这种接入模式下用不用得到、它能不能一行都没有。**
 >
-> **schema 事实**(表/列/约束/策略/索引)对应 head `cb3e134da690`,与库完全一致。
-> **接入侧描述**(§6 三种模式、`SINGLE_TENANT_ORG_ID`、`bootstrap_platform`)反映的是
-> 租户接入线**工作区当前状态**,其中部分代码尚未 commit。
+> **§0 / §1 的统计数字已按 head `f4c2a8e19d63` 于 2026-08-04 重新 psql 核实。**
+> §3 逐表详解与 §4.2 以下的策略清单成文于 head `cb3e134da690`,后三个迁移**只加策略与外键、
+> 不加表不改列**,因此表结构描述仍然成立;新增的四类策略见 §4.2 的补充小节。
 
 ---
 
@@ -19,7 +21,7 @@
 |---|---|---|
 | 一共几张表? | **64** 张(`public` schema,不含 `zhparser` schema 的扩展自带表) | §1 |
 | 隔离怎么做的? | 单库单 schema + `org_id` 分区键 + PostgreSQL RLS(`FORCE ROW LEVEL SECURITY`) | §4 |
-| 开了 RLS 的有几张? | **46** 张,全部 `ENABLE` + `FORCE`,策略名统一 `org_isolation` | §4.2 |
+| 开了 RLS 的有几张? | **46** 张,全部 `ENABLE` + `FORCE`。每张都有一条 `org_isolation`,另有 4 类补充策略共 56 条 | §4.2 |
 | 有几张带 `org_id` 但没开 RLS? | **6** 张,刻意豁免,见清单与理由 | §4.5 |
 | `org_id` 真的是外键吗? | **绝大多数不是**。全库只有 **6** 张表的 `org_id` 带指向 `organizations` 的外键 | §4.6 |
 | 我要不要往 `organizations` 里写行? | 桥接:**只有用到 agent 权限子系统时才必须**(`ensure_org()`);单租户:**必须**(默认 org 不在迁移 seed 里) | §6 |
@@ -40,9 +42,9 @@
 | `ENABLE ROW LEVEL SECURITY` 的表 | **46** | `pg_class.relrowsecurity` |
 | `FORCE ROW LEVEL SECURITY` 的表 | **46**(与上一行完全重合,无例外) | `pg_class.relforcerowsecurity` |
 | 未开 RLS 的表 | **18**(= 12 张无 `org_id` + 6 张豁免) | — |
-| RLS 策略总数 | 49(46 条 `org_isolation` + 3 条 `platform_read`) | `pg_policies` |
-| 外键约束总数 | **108** | `pg_constraint where contype='f'` |
-| 其中多列复合外键 | **45**(几乎全部是携带 `org_id` / `kb_id` / `snapshot_id` 的租户一致性外键) | `array_length(conkey,1) > 1` |
+| RLS 策略总数 | **102**,分 8 类,见下表 | `pg_policies` |
+| 外键约束总数 | **109** | `pg_constraint where contype='f'` |
+| 其中多列复合外键 | **46**(几乎全部是携带 `org_id` / `kb_id` / `snapshot_id` 的租户一致性外键) | `array_length(conkey,1) > 1` |
 | 指向 `organizations(id)` 的外键 | **6** | `pg_constraint where confrelid='organizations'::regclass` |
 | 索引总数 | 343 | `pg_indexes` |
 | 需要的 PG 扩展 | `vector` 0.8.5 / `pg_trgm` 1.6 / `zhparser` 2.4 / `pgcrypto` 1.3 | `pg_extension` |
@@ -51,6 +53,33 @@
 
 > `zhparser` 扩展自带的 `zhprs_custom_word` 表位于 `zhparser` schema,**不属于本模型的 64 张表**,
 > 也不参与迁移与备份口径。
+
+### 1.1 RLS 策略分类(head `f4c2a8e19d63`,psql 核实)
+
+| 策略名 | 条数 | 类型 | 命令 | 覆盖的表 |
+|---|---:|---|---|---|
+| `org_isolation` | 46 | PERMISSIVE | ALL | 全部 46 张开了 RLS 的表 |
+| `shared_knowledge_read` | 16 | PERMISSIVE | SELECT | 已发布知识的三层可见性:本 org / 平台 org / 经 `kb_shares` 被分享。`knowledge_bases`、`knowledge_snapshots`、`source_documents`、`document_revisions`、`kb_chunks`、`kb_chunk_embeddings`、`kb_entities`、`kb_entity_types`、`kb_graph_edges`、`kb_pages`、`kb_image_assets`、`kb_snapshot_*`、`snapshot_*_supports` |
+| `snapshot_visibility` | 9 | **RESTRICTIVE** | SELECT | 9 张快照投影表 |
+| `snapshot_insert_scope` | 9 | **RESTRICTIVE** | INSERT | 同上 |
+| `snapshot_update_scope` | 9 | **RESTRICTIVE** | UPDATE | 同上 |
+| `snapshot_delete_scope` | 9 | **RESTRICTIVE** | DELETE | 同上 |
+| `platform_read` | 3 | PERMISSIVE | SELECT | `chat_events` / `llm_traces` / `usage_daily` |
+| `grantee_read` | 1 | PERMISSIVE | SELECT | `kb_shares`(被分享方能看到指向自己的分享行) |
+| **合计** | **102** | | | |
+
+两个必须记住的语义:
+
+1. **PERMISSIVE 之间是 OR**。加一条 `shared_knowledge_read` 等于**放宽**可见性 ——
+   `org_isolation` 之外又开了"平台 org 的已发布知识"和"被分享给我的 KB"两条通路。
+   写代码时不要假设"看得见 = 是我 org 的数据"。
+2. **RESTRICTIVE 之间以及与 PERMISSIVE 之间是 AND**。四条 `snapshot_*_scope` 是快照投影表的
+   **第二道防线**:即使 org 对上了,快照作用域对不上照样一行都读不到、写不进。它们只会收紧,
+   不会放宽。
+
+9 张受快照作用域约束的表:`kb_chunks`、`kb_entities`、`kb_graph_edges`、`kb_pages`、
+`kb_snapshot_entity_nodes`、`kb_snapshot_entity_node_supports`、`kb_snapshot_image_assets`、
+`snapshot_fact_supports`、`snapshot_projection_supports`。
 
 ---
 
@@ -73,6 +102,9 @@
 图例:
 - **org_id**:`NN` = 有且 NOT NULL;`NULL可` = 有且可空(NULL 表示平台级);`—` = 无此列
 - **RLS**:`FORCE` = `ENABLE` + `FORCE ROW LEVEL SECURITY` + `org_isolation` 策略;`FORCE+PR` = 另有 `platform_read` 旁路;`豁免` = 有 `org_id` 但刻意不开;`—` = 无 `org_id`,不适用
+  > 本列只标 baseline 的策略形态。KB 侧 16 张表另有 `shared_knowledge_read` 放宽读、
+  > 9 张快照投影表另有四条 RESTRICTIVE 的 `snapshot_*_scope` 收紧读写 —— 见 §1.1 与 §4.3bis,
+  > **不要只看本列就断定某张表的可见范围**。
 - **桥接**:桥接 / 单租户模式(宿主自带身份、不挂 SDK 的 auth/members router)下是否会写到这张表
 - **可空**:这张表在一个正常运行的部署里能不能一行都没有
 
@@ -218,7 +250,7 @@
 
 | 表 | 用途 | org_id | RLS | 外键 | 桥接 | 可空 |
 |---|---|---|---|---|---|---|
-| `alembic_version` | Alembic 当前 head(现为 `cb3e134da690`) | — | — | — | 用 | 否 |
+| `alembic_version` | Alembic 当前 head(现为 `f4c2a8e19d63`) | — | — | — | 用 | 否 |
 
 ---
 
@@ -287,6 +319,34 @@ CREATE POLICY platform_read ON <t> FOR SELECT
   `UUID(str(...))` 规整,杜绝拼接注入),不硬编码。当前库里是
   `00000000-0000-0000-0000-000000000001`(baseline 迁移 seed,`slug='platform'`)。
 
+### 4.3bis baseline 之后追加的三类策略
+
+`cb3e134da690` 之后的三个迁移只加策略与外键,不加表不改列。它们引入的策略在 §1.1 有完整分类表,
+这里只讲**读这一节时最容易误判的三件事**:
+
+**1. `shared_knowledge_read`(16 张表,PERMISSIVE / SELECT,`e3f5a71c8b42`)**
+把已发布知识的可见性还原成三层:本 org、平台 org、以及经 `kb_shares` 被分享给当前 org 的 KB。
+
+```sql
+USING (org_id = current_org
+       OR org_id = '<platform_org_id>'
+       OR EXISTS (SELECT 1 FROM kb_shares s
+                  WHERE s.kb_id = <t>.kb_id AND s.grantee_org_id = current_org))
+```
+
+**后果**:在这 16 张表上,"这行可见"**不再等价于**"这行属于我的 org"。
+写业务代码时不要靠 RLS 反推归属 —— 要归属就显式比 `org_id`。
+
+**2. 四条 `snapshot_*_scope`(各 9 张表,RESTRICTIVE,`f4c2a8e19d63`)**
+快照投影表的第二道防线,分别管 SELECT / INSERT / UPDATE / DELETE。
+RESTRICTIVE 与其他策略是 **AND**:org 对上了但快照作用域对不上,照样一行读不到、写不进。
+它们只会收紧,永远不会放宽 —— 所以 §4.2 的 `org_isolation` 语义不受影响。
+
+**3. `grantee_read`(`kb_shares`,PERMISSIVE / SELECT)**
+让被分享方能看到指向自己的那条分享行(否则它知道能读 KB,却查不到自己凭什么能读)。
+
+> 三层可见性的实际语义、跨组织分享 API 与快照作用域的写入约束,详见 §5 与 §6。
+
 ### 4.4 RLS 豁免清单(6 张,`_RLS_EXEMPT`)
 
 这 6 张表**有 `org_id` 列但刻意不开 RLS**,定义在 `4a6a2d9d8aa4_baseline.py` 的 `_RLS_EXEMPT`:
@@ -309,7 +369,7 @@ CREATE POLICY platform_read ON <t> FOR SELECT
 
 ### 4.5 `org_id` 外键真相 —— 接入方案的关键事实
 
-**全库 108 条外键里,只有 6 条指向 `organizations(id)`**(psql 核实:
+**全库 109 条外键里,只有 6 条指向 `organizations(id)`**(psql 核实:
 `select count(*) from pg_constraint where contype='f' and confrelid='organizations'::regclass` → `6`):
 
 | 表 | 约束名 | 删除行为 | 归类 |
@@ -517,9 +577,14 @@ set_principal_resolver(my_resolver)          # 装配期调一次,在 create_app
 | 版本 | 说明 |
 |---|---|
 | `4a6a2d9d8aa4_baseline` | 建 **60** 张表 + 中文检索配置 + 45 张表的 RLS + 3 条 `platform_read` + 平台 org seed + RLS 自检 |
-| `cb3e134da690_operations` | **当前 head**。加 `provider_probe_statuses` / `service_heartbeats` / `kb_operational_incidents` **3** 张运维表(第 3 张开 RLS) |
+| `cb3e134da690_operations` | 加 `provider_probe_statuses` / `service_heartbeats` / `kb_operational_incidents` **3** 张运维表(第 3 张开 RLS) |
+| `d7b1c94f2a30_kb_active_snapshot_fk` | 补建 `knowledge_bases.active_snapshot_id` 的复合外键(全库外键 108 → **109**,复合外键 45 → **46**) |
+| `e3f5a71c8b42_shared_knowledge_read` | 加 16 条 `shared_knowledge_read`(PERMISSIVE/SELECT)+ 1 条 `grantee_read`,还原已发布知识的三层可见性 |
+| `f4c2a8e19d63_snapshot_scope_rls` | **当前 head**。给 9 张快照投影表各加 4 条 **RESTRICTIVE** 策略(`snapshot_visibility` / `_insert_scope` / `_update_scope` / `_delete_scope`),共 36 条 |
 
 60 + 3 = 63,加上 Alembic 自建的 `alembic_version` 共 **64** 张,与 §1 的实测数吻合。
+后三个迁移**不建表、不改列**,只加外键与策略 —— 所以 §3 逐表详解的结构描述不受影响,
+但策略总数从 49 涨到 **102**(分类见 §1.1)。
 
 baseline 的 RLS 段有两条重要工程约定:
 
