@@ -1,9 +1,45 @@
 [project]
 name = "nicekit"
 version = "0.1.0"
-description = "多租户 Agent + KB 平台 SDK(core/tenancy/llm/kb/agent/capabilities/runtime 分层)"
+description = "Multi-tenant Agent + Knowledge Base platform SDK for Python — tenancy with PostgreSQL RLS, LLM routing, agent runtime, and hybrid retrieval."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "patrickleehua", email = "cyhlbh2010@gmail.com" },
+]
+maintainers = [
+    { name = "patrickleehua", email = "cyhlbh2010@gmail.com" },
+]
+keywords = [
+    "multi-tenant",
+    "agent",
+    "rag",
+    "knowledge-base",
+    "llm",
+    "fastapi",
+    "postgresql",
+    "rls",
+    "sdk",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    # 协议不写 classifier:PEP 639 的 License-Expression 才是权威来源,
+    # 两者并存时构建后端「MAY」报错,没必要留这个前向风险。
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Framework :: FastAPI",
+    "Framework :: AsyncIO",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
 dependencies = [
     "alembic>=1.18.5",
     "anthropic>=0.116.0",
@@ -41,6 +77,13 @@ dependencies = [
     "xlrd>=2.0.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/patrickleehua/nice-knowledge"
+Repository = "https://github.com/patrickleehua/nice-knowledge"
+Documentation = "https://github.com/patrickleehua/nice-knowledge/tree/main/docs"
+Issues = "https://github.com/patrickleehua/nice-knowledge/issues"
+Changelog = "https://github.com/patrickleehua/nice-knowledge/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
@@ -49,11 +92,22 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+# >=1.27 是 PEP 639(license = "Apache-2.0" + license-files)的最低支持版本
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nicekit"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/nicekit",
+    "tests",
+    "alembic.ini",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+]
 
 [tool.ruff]
 line-length = 100

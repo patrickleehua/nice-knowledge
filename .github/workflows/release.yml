@@ -1,0 +1,105 @@
+name: Release
+
+# 触发方式:
+#   1) push 一个 v* 形式的 tag(例如 v0.1.0)-> 构建并发布到正式 PyPI
+#   2) 手动 workflow_dispatch -> 由 target 输入决定发到 TestPyPI(默认)还是正式 PyPI
+#
+# 发布走 PyPI Trusted Publishing(OIDC),仓库里不存任何 API token。
+# 详细配置步骤见 docs/RELEASING.md。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "发布目标"
+        type: choice
+        required: true
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build nicekit distributions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Build sdist + wheel
+        # workspace 单仓里只发布 nicekit;apps/demo/backend 不上传 PyPI
+        run: uv build --package nicekit
+
+      - name: Validate metadata
+        run: uvx twine check dist/*
+
+      - name: List artifact contents
+        run: |
+          ls -l dist
+          python -m zipfile -l dist/*.whl | head -50
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: nicekit-dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    # 仅手动触发且显式选择 testpypi 时执行(tag push 永远直接进正式源)
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: nicekit-dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
+          # 演练可能重复上传同一版本,允许跳过已存在的文件
+          skip-existing: true
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'push' || inputs.target == 'pypi'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: nicekit-dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

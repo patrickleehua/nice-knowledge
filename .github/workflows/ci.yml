@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      # 说明:这里刻意不跑 `ruff format --check`。
+      # 现状是 383 个源文件里有 221 个不符合 ruff format 的排版(手工排版为主),
+      # 一次性 reformat 会产生一个跟业务无关的巨型 diff,先不把它变成 CI 门禁。
+      # 待专门做一次全量 format 提交后,再把下面这行放开:
+      #   - run: uv run ruff format --check .
+
+      - name: Pytest (nicekit)
+        # 必须在 packages/nicekit 目录下跑:pytest 配置(asyncio_mode=auto、
+        # testpaths、addopts="-m 'not live'")写在 packages/nicekit/pyproject.toml,
+        # 在仓库根执行时 pytest 会认根 pyproject.toml 为 rootdir 从而读不到这些配置。
+        #
+        # 边界说明:addopts 已默认排除 `live` 标记的用例,所以这一步不需要
+        # PostgreSQL / Redis / S3 等外部服务,不配 service 容器是有意为之。
+        # 需要真实基础设施的用例请本地用 `-m live` 手动跑。
+        working-directory: packages/nicekit
+        run: uv run --package nicekit pytest -q

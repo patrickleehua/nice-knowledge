@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "多租户 Agent + KB 平台 SDK 单仓(uv workspace 根,不承载代码)"
 readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "patrickleehua", email = "cyhlbh2010@gmail.com" },
+]
 dependencies = [
     "nicekit",
 ]
