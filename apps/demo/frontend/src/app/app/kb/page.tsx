@@ -13,6 +13,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import {
@@ -59,10 +60,12 @@ const EXAMPLE_QUESTIONS = [
 
 function SearchPageFallback() {
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <Skeleton className="mx-auto mt-16 h-8 w-64" />
-      <Skeleton className="mx-auto h-16 w-full max-w-3xl rounded-2xl" />
-      <Skeleton className="mx-auto h-32 w-full max-w-3xl rounded-2xl" />
+    <div className="nk-liquid-surface -m-3 min-h-[calc(100dvh-3.5rem)] px-3 py-6 sm:-m-6 sm:px-6">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <Skeleton className="mx-auto mt-16 h-8 w-64" />
+        <Skeleton className="mx-auto h-16 w-full max-w-3xl rounded-2xl" />
+        <Skeleton className="mx-auto h-32 w-full max-w-3xl rounded-2xl" />
+      </div>
     </div>
   );
 }
@@ -173,7 +176,8 @@ function KbSearch() {
   const showLanding = !submitted;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="nk-liquid-surface -m-3 min-h-[calc(100dvh-3.5rem)] px-3 py-4 sm:-m-6 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-5xl">
       <PageHeader title="知识检索" description="直接提问，或定位内部知识原文" />
 
       <section
@@ -184,9 +188,16 @@ function KbSearch() {
       >
         {showLanding && (
           <div className="mb-7 text-center">
-            <span className="mx-auto mb-4 flex size-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
-              <Sparkles className="size-5" />
-            </span>
+            <div className="nk-brand-glass-mark mx-auto mb-5 flex size-16 items-center justify-center">
+              <Image
+                src="/images/nicekit.png"
+                alt="NiceKit"
+                width={52}
+                height={52}
+                priority
+                className="size-13 rounded-[1rem] object-cover"
+              />
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               有问题，直接问
             </h1>
@@ -196,9 +207,9 @@ function KbSearch() {
           </div>
         )}
 
-        <div className="rounded-2xl border border-border bg-card p-2 shadow-sm focus-within:border-primary/40 focus-within:ring-3 focus-within:ring-primary/10">
+        <div className="nk-liquid-card rounded-[1.6rem] p-2 transition-[box-shadow] focus-within:shadow-[0_22px_58px_rgb(15_23_42/0.12),inset_0_1px_0_rgb(255_255_255/0.86)] dark:focus-within:shadow-[0_22px_58px_rgb(0_0_0/0.28)]">
           <div
-            className="mb-1 flex w-fit items-center rounded-xl bg-muted p-1"
+            className="mb-1 flex w-fit items-center rounded-xl bg-white/48 p-1 ring-1 ring-black/[0.035] dark:bg-white/[0.055] dark:ring-white/[0.06]"
             role="tablist"
             aria-label="知识检索方式"
           >
@@ -210,8 +221,8 @@ function KbSearch() {
               className={cn(
                 "flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors",
                 mode === "answer"
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-white/88 text-foreground shadow-sm ring-1 ring-black/[0.035] dark:bg-white/[0.12] dark:ring-white/[0.06]"
+                  : "text-muted-foreground hover:bg-white/48 hover:text-foreground dark:hover:bg-white/[0.06]",
               )}
             >
               <Sparkles className="size-4" />
@@ -225,8 +236,8 @@ function KbSearch() {
               className={cn(
                 "flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors",
                 mode === "sources"
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-white/88 text-foreground shadow-sm ring-1 ring-black/[0.035] dark:bg-white/[0.12] dark:ring-white/[0.06]"
+                  : "text-muted-foreground hover:bg-white/48 hover:text-foreground dark:hover:bg-white/[0.06]",
               )}
             >
               <Search className="size-4" />
@@ -262,7 +273,7 @@ function KbSearch() {
               aria-label={mode === "answer" ? "向知识库提问" : "检索知识原文"}
               placeholder={
                 mode === "answer"
-                  ? "例如：巴黎亲子团住哪个区域更方便？"
+                  ? "例如：这批资料里关于数据留存的约定是什么？"
                   : "输入实体名称或文档关键词"
               }
               className="max-h-32 min-h-12 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-3 text-base leading-6 outline-none placeholder:text-muted-foreground"
@@ -286,7 +297,7 @@ function KbSearch() {
               size="icon-lg"
               aria-label={mode === "answer" ? "获取解答" : "开始检索"}
               disabled={!input.trim() || isFetching}
-              className="rounded-xl"
+              className="rounded-full shadow-[0_8px_22px_rgb(15_23_42/0.12)]"
             >
               {isFetching ? (
                 <Loader2 className="animate-spin" />
@@ -298,7 +309,7 @@ function KbSearch() {
             </Button>
           </form>
 
-          <div className="flex min-h-8 items-center gap-2 border-t border-border px-2 pt-1">
+          <div className="flex min-h-8 items-center gap-2 border-t border-white/58 px-2 pt-1 dark:border-white/[0.07]">
             {(bases.data?.length ?? 0) > 1 ? (
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -369,7 +380,7 @@ function KbSearch() {
                     setInput(question);
                     submit(question);
                   }}
-                  className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-accent-foreground"
+                  className="rounded-full border border-white/62 bg-white/58 px-3 py-1.5 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.72)] transition-colors hover:border-primary/30 hover:bg-white/86 hover:text-foreground dark:border-white/[0.08] dark:bg-white/[0.055] dark:hover:bg-white/[0.09]"
                 >
                   {question}
                 </button>
@@ -433,11 +444,12 @@ function KbSearch() {
               icon={SearchX}
               title="没有找到相关资料"
               description="试试更具体的实体名称、字段值或文档关键词。"
-              className="rounded-2xl border border-border bg-card py-16"
+              className="nk-liquid-card rounded-2xl py-16"
             />
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

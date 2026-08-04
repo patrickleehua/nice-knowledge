@@ -35,7 +35,7 @@ export function SearchHistory({
         {items.map((item) => (
           <span
             key={item}
-            className="inline-flex items-center gap-0.5 rounded-full border border-border py-0.5 pr-1 pl-2.5 text-xs transition-colors hover:border-primary/50"
+            className="inline-flex items-center gap-0.5 rounded-full border border-white/62 bg-white/52 py-0.5 pr-1 pl-2.5 text-xs shadow-[inset_0_1px_0_rgb(255_255_255/0.72)] transition-colors hover:border-primary/35 hover:bg-white/84 dark:border-white/[0.08] dark:bg-white/[0.055] dark:hover:bg-white/[0.09]"
           >
             <button
               type="button"

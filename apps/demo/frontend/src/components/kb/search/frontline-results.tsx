@@ -120,14 +120,14 @@ export function FrontlineSearchResults({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="nk-liquid-card overflow-hidden rounded-2xl">
         {hits.map((hit, index) => (
           <article
             key={
               (typeof hit.data.id === "string" && hit.data.id) ||
               `${hit.source}-${index}`
             }
-            className="flex gap-3 border-b border-border p-4 last:border-b-0 hover:bg-muted/30"
+            className="flex gap-3 border-b border-white/58 p-4 transition-colors last:border-b-0 hover:bg-white/44 dark:border-white/[0.07] dark:hover:bg-white/[0.045]"
           >
             <ResultIcon kind={hit.kind} />
             <div className="min-w-0 flex-1">
@@ -175,7 +175,7 @@ function AnswerSource({ source }: { source: KnowledgeAnswerSource }) {
   return (
     <article
       id={`source-${ref}`}
-      className="scroll-mt-20 rounded-xl border border-border bg-card p-4 transition-colors target:border-primary/60 target:bg-accent/30"
+      className="nk-liquid-card scroll-mt-20 rounded-xl p-4 transition-colors target:border-primary/60 target:bg-accent/30"
     >
       <div className="flex items-start gap-3">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">
@@ -295,8 +295,8 @@ export function KnowledgeAnswerPanel({
   return (
     <TooltipProvider delay={150}>
       <div className="space-y-6">
-        <article className="overflow-hidden rounded-2xl border border-primary/15 bg-card shadow-sm">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-accent/35 px-5 py-3">
+        <article className="nk-liquid-card overflow-hidden rounded-2xl">
+          <div className="flex flex-wrap items-center gap-2 border-b border-white/58 bg-white/36 px-5 py-3 dark:border-white/[0.07] dark:bg-white/[0.045]">
             <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Sparkles className="size-4" />
             </span>
@@ -364,7 +364,7 @@ export function KnowledgeAnswerPanel({
             )}
           </div>
           {status === "success" && query && answerText && (
-            <div className="border-t border-border px-5 py-3 sm:px-7">
+            <div className="border-t border-white/58 px-5 py-3 dark:border-white/[0.07] sm:px-7">
               <AnswerFeedback
                 query={query}
                 answerText={answerText}
@@ -416,7 +416,7 @@ export function KnowledgeAnswerEmptyState({
           改用查原文检索
         </Button>
       }
-      className="rounded-2xl border border-border bg-card py-16"
+      className="nk-liquid-card rounded-2xl py-16"
     />
   );
 }
