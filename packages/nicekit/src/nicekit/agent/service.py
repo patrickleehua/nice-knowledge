@@ -67,7 +67,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-from nicekit.agent import run_inputs, runtime_tools, session_goal
+from nicekit.agent import builtin_tools, run_inputs, runtime_tools, session_goal
 from nicekit.agent.compression import (
     latest_success_summary,
     rows_after_summary,
@@ -1007,6 +1007,10 @@ async def _build_tool_snapshot(
     }
     if card.skills:
         snapshot.update({name: catalog[name] for name in skill_tools if name in catalog})
+    # 数据源没接好的工具不进快照(与上面 skills 未配时不给 skill 工具同一个道理):
+    # 暴露一个必然返回 empty 的工具只会诱导模型白跑一轮往返。
+    if not builtin_tools.retrieval_snapshot_available():
+        snapshot.pop("retrieval_get", None)
 
     # 运行时临时工具:在就绪度裁剪与执行器隔离之前并入,让它和卡白名单工具走
     # 完全同一条通路(临时开的 web_search 一样要过联网就绪检查、一样被隔离执行),

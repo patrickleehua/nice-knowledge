@@ -917,3 +917,68 @@ def test_tool_def_stage_defaults_to_none() -> None:
 )
 def test_service_has_no_business_residue(word: str) -> None:
     assert word not in _SERVICE_SOURCE
+
+
+async def test_snapshot_hides_retrieval_get_when_host_never_wired_the_snapshot() -> None:
+    """数据源没接好的工具不该出现在模型可见列表里。
+
+    retrieval_get 的检索快照由宿主注入(set_retrieval_snapshot_provider),未注入
+    时它必然返回 empty。把这种工具暴露给模型,实测会让模型在 kb_search 之后调它
+    去取全文、拿到"还没有成功的检索记录"再重新组织回答——白跑一轮模型往返。
+    """
+    from nicekit.agent import builtin_tools as bt
+
+    registry = _registry()
+
+    async def _noop(_ctx, _args):
+        return {"empty": True}
+
+    registry.add(
+        ToolDef(
+            name="retrieval_get",
+            description="检索依据",
+            schema=_EMPTY_SCHEMA,
+            executor=_noop,
+            permission=_READ_PERMISSION,
+            label="检索依据",
+        )
+    )
+    card = _card(tools=("reader", "retrieval_get"))
+
+    bt.set_retrieval_snapshot_provider(None)
+    service._capability_probes.clear()
+    tools, _allowed, _cap, _rt, _dec = await service._build_tool_snapshot(
+        _FakeSession(),
+        card,
+        _noop_emit,
+        session_factory=object(),
+        org_id=ORG_ID,
+        user_id=USER_ID,
+        role="member",
+        chat_session_id=SESSION_ID,
+        registry=registry,
+    )
+    assert "retrieval_get" not in tools
+    assert "reader" in tools
+
+    async def provider(_session, _org_id, _chat_session):
+        return {"empty": False, "counts": {}, "retrieval": {}}
+
+    bt.set_retrieval_snapshot_provider(provider)
+    try:
+        service._capability_probes.clear()
+        tools, _allowed, _cap, _rt, _dec = await service._build_tool_snapshot(
+            _FakeSession(),
+            card,
+            _noop_emit,
+            session_factory=object(),
+            org_id=ORG_ID,
+            user_id=USER_ID,
+            role="member",
+            chat_session_id=SESSION_ID,
+            registry=registry,
+        )
+    finally:
+        bt.set_retrieval_snapshot_provider(None)
+
+    assert "retrieval_get" in tools

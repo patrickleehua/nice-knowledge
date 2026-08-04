@@ -292,3 +292,25 @@ def test_memory_write_is_automatic_while_forget_needs_review() -> None:
     assert forget.delegation is ToolDelegation.REVIEWABLE  # 删的是组织资产
     assert write.effect is ToolEffect.WRITE and forget.effect is ToolEffect.WRITE
     assert write.scope is PermissionScope.ORGANIZATION
+
+
+def test_retrieval_snapshot_availability_tracks_provider_injection() -> None:
+    """工具是否该暴露给模型,取决于宿主有没有把数据源接上。
+
+    未接时 retrieval_get 必然返回 empty。实测模型会在 kb_search 之后调它去取
+    全文,拿到"还没有成功的检索记录"后再重新组织回答——白白多一次模型往返,
+    而且那句提示本身有误导性(它明明刚检索过)。
+    """
+    bt.set_retrieval_snapshot_provider(None)
+    assert bt.retrieval_snapshot_available() is False
+
+    async def provider(_session, _org_id, _chat_session):
+        return {"empty": False, "counts": {}, "retrieval": {}}
+
+    bt.set_retrieval_snapshot_provider(provider)
+    try:
+        assert bt.retrieval_snapshot_available() is True
+    finally:
+        bt.set_retrieval_snapshot_provider(None)
+
+    assert bt.retrieval_snapshot_available() is False

@@ -99,6 +99,17 @@ def set_retrieval_snapshot_provider(provider: RetrievalSnapshotProvider | None) 
     _retrieval_snapshot_provider = provider or _null_retrieval_snapshot
 
 
+def retrieval_snapshot_available() -> bool:
+    """宿主是否接好了检索快照数据源。
+
+    未接时 ``retrieval_get`` 必然返回 ``empty``,这种工具不该出现在模型可见的
+    列表里:实测模型会在 ``kb_search`` 之后调它去取全文,拿到"当前作用域还没有
+    成功的检索记录"后再重新组织回答——白白多一次模型往返(2~4 秒),而且那句
+    提示本身还有误导性(它明明刚检索过)。
+    """
+    return _retrieval_snapshot_provider is not _null_retrieval_snapshot
+
+
 def get_retrieval_snapshot_provider() -> RetrievalSnapshotProvider:
     return _retrieval_snapshot_provider
 
