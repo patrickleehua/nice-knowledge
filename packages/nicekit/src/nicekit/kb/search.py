@@ -2960,14 +2960,29 @@ async def _search_kb_uncached(
         if source_doc_id and source_doc_id not in source_representatives:
             source_representatives[source_doc_id] = key
 
+    deferred: list[CandidateKey] = []
     for key in final_keys:
         source_doc_id = _source_doc(key)
         if source_doc_id:
             representative = source_representatives.setdefault(source_doc_id, key)
             if representative != key:
                 sibling_counts[representative] = sibling_counts.get(representative, 0) + 1
+                deferred.append(key)
                 continue
         folded_keys.append(key)
+
+    # 折叠的本意是先铺开文档面,不是丢结果:一轮之后若 top_k 还有空位,按原排序把
+    # 被折叠的兄弟段补回来。否则会出现 top_k=10 却只返回 6 条、而真正含答案的那段
+    # 正躺在被折叠的兄弟里——"星轨网关所在的集群和存储在不在同一个机房"就栽在这:
+    # 《沧澜集群》露出的是"集群内的服务"一节,写着机房归属的"集群定位"一节被折叠,
+    # 模型于是如实回答"资料没有说明沧澜集群在哪个机房"。
+    if len(folded_keys) < top_k:
+        for key in deferred[: top_k - len(folded_keys)]:
+            folded_keys.append(key)
+            representative = source_representatives.get(_source_doc(key) or "")
+            if representative is not None and sibling_counts.get(representative):
+                # 兄弟段已经自己露面了,不该再计进代表的"被折叠段数"
+                sibling_counts[representative] -= 1
     folded_keys = folded_keys[:top_k]
     hits = [
         SearchHit(

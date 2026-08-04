@@ -980,10 +980,47 @@ async def test_same_document_folding_keeps_best_without_score_bonus(monkeypatch)
         reranker=FixedReranker(),
     )
 
-    assert [hit.data["id"] for hit in hits] == [str(best.key[1]), str(other.key[1])]
-    assert hits[0].data["sibling_count"] == 2
+    # 文档面先铺开(best、other 各代表一篇),top_k 还有空位则按分数把被折叠的
+    # 兄弟段补回来——折叠是为了先展示不同文档,不是为了丢结果。
+    assert [hit.data["id"] for hit in hits] == [
+        str(best.key[1]),
+        str(other.key[1]),
+        str(first.key[1]),
+        str(third.key[1]),
+    ]
     assert hits[0].confidence == 0.9
+    # 两个兄弟都自己露面了,就不该再计进代表的"被折叠段数"
+    assert hits[0].data["sibling_count"] == 0
     assert hits[1].data["sibling_count"] == 0
+
+
+async def test_same_document_folding_drops_siblings_only_when_top_k_is_full(
+    monkeypatch,
+) -> None:
+    """名额不够时才真丢兄弟段,且丢的是分数最低的那些。"""
+    source_doc_id = uuid4()
+    best = _search_candidate(kind="chunk", source_doc_id=source_doc_id, structured_score=4.0)
+    second = _search_candidate(kind="chunk", source_doc_id=source_doc_id, structured_score=3.0)
+    third = _search_candidate(kind="chunk", source_doc_id=source_doc_id, structured_score=2.0)
+    other = _search_candidate(kind="chunk", source_doc_id=uuid4(), structured_score=1.0)
+    _patch_structured_only(monkeypatch, [best, second, third, other])
+
+    hits = await search_kb(
+        object(),  # type: ignore[arg-type]
+        uuid4(),
+        "清迈酒店",
+        top_k=3,
+        embedder=None,
+        reranker=None,
+    )
+
+    assert [hit.data["id"] for hit in hits] == [
+        str(best.key[1]),
+        str(other.key[1]),
+        str(second.key[1]),
+    ]
+    # third 没进来,代表身上仍记着一段被折叠
+    assert hits[0].data["sibling_count"] == 1
 
 
 def test_rrf_native_ties_share_rank_and_score_vectors_must_align() -> None:
@@ -1514,6 +1551,10 @@ async def test_graph_only_candidate_never_takes_the_document_slot_from_other_cha
         graph_enabled=True,
     )
 
-    # 该文档露出的必须仍是有佐证的那一条,图谱证据段只计入 sibling
-    assert [hit.data["id"] for hit in hits] == [str(answer.key[1])]
-    assert hits[0].data["sibling_count"] == 1
+    # 关键:该文档的**代表位**必须仍是有佐证的那一条,图谱证据段不得抢到首位。
+    # 它可以在 top_k 有空位时作为补充跟在后面,但不能取而代之。
+    assert hits[0].data["id"] == str(answer.key[1])
+    assert [hit.data["id"] for hit in hits] == [
+        str(answer.key[1]),
+        str(evidence_chunk.id),
+    ]
