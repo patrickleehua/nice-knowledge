@@ -48,18 +48,27 @@ def _fts_config():
 
 
 def _seed_tsquery(query: str):
-    """种子发现用**析取**匹配实体名,而不是 websearch 默认的合取。
+    """种子发现用**析取**匹配实体名,而不是 websearch 默认的合取/短语。
 
-    自然问句里实体名只占一个词:"modelMemory 是干嘛的"会被编译成
-    ``'modelmemory' & '是' <-> '干'``,要求实体名同时含疑问词,必然零种子——
-    图谱一路因此对所有问句形态失效。实体名是专名,析取不会被功能词带偏
-    (没有实体叫"是"),命中后还有边扩展、时效剪枝与证据校验层层收紧。
+    自然问句里实体名只占其中一小段,而 ``websearch_to_tsquery`` 会把整句编译成
+    "全都要满足"的形式,等于要求实体名自身含疑问词,必然零种子。两种形式都要降级:
 
-    做法是把编译结果里的 ``&`` 换成 ``|`` 再解析回 tsquery:此时词元已被
-    词典归一并带引号,``to_tsquery`` 不会二次分词。空查询原样得到空 tsquery。
+    - 含 ASCII 词时给的是**合取**:``'modelmemory' & '是' <-> '干'``;
+    - **纯中文时给的是整句短语**:"澜图鉴权服务部署在哪个机房" →
+      ``'图鉴' <-> '权' <-> '服务' <-> '部署' <-> '机房'``。实体名"澜图鉴权服务"
+      只有 ``'图鉴' '权' '服务'`` 三个词元,凑不齐这条相邻链,照样零种子。
+
+    所以 ``&`` 和 ``<->`` / ``<N>`` 一并换成 ``|``。只换 ``&`` 的话中文库会整体失效
+    ——这正是修复前的实际状况。降级后词元已被词典归一并带引号,``to_tsquery``
+    不会二次分词;空查询原样得到空 tsquery。
+
+    析取不会把种子面放开太多:实体名是专名,``ts_rank_cd`` 会把词元重叠多的排前面,
+    再由 ``limit(top_k)`` 截断,后面还有边扩展、时效剪枝与证据校验层层收紧。
     """
     compiled = cast(func.websearch_to_tsquery(_fts_config(), query), Text)
-    return func.to_tsquery(_fts_config(), func.replace(compiled, "&", "|"))
+    # <-> 与 <N> 都是位置约束,对"实体名是否被提到"这个判断没有意义
+    without_phrase = func.regexp_replace(compiled, "<[0-9-]*>", "|", "g")
+    return func.to_tsquery(_fts_config(), func.replace(without_phrase, "&", "|"))
 
 
 @dataclass(frozen=True, slots=True)

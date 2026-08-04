@@ -816,3 +816,62 @@ async def test_withdrawn_document_stops_recall(app_sessions, scene) -> None:
         )
         await session.commit()
     assert await _recall(app_sessions, seeded, SEED_NAME) == []
+
+
+@pytest.mark.parametrize(
+    ("entity_name", "question"),
+    [
+        # 纯中文:websearch_to_tsquery 给的是整句**短语**(<->),不是合取(&)
+        ("澜图鉴权服务", "澜图鉴权服务部署在哪个机房"),
+        ("砚台存储", "砚台存储的冷热分层是怎么划分的"),
+        # 中英混排:给的是合取(&)
+        ("modelMemory", "modelMemory 是干嘛的"),
+    ],
+)
+async def test_seed_query_matches_entity_name_in_any_question_form(
+    app_sessions, entity_name, question
+) -> None:
+    """种子发现必须能在自然问句里认出实体名,中英文都要成立。
+
+    这条曾经只覆盖了英文:``websearch_to_tsquery`` 对含 ASCII 的查询产出**合取**
+    ``'modelmemory' & '是' <-> '干'``,而对纯中文产出的是**整句短语**
+    ``'图鉴' <-> '权' <-> '服务' <-> '部署' <-> '机房'``。当时只把 ``&`` 降级成
+    ``|``,短语链原样保留,于是实体名凑不齐那条相邻链——中文库的图谱通道整体
+    零召回,而英文用例全绿,完全看不出来。
+    """
+    from sqlalchemy import func, select
+
+    from nicekit.kb.graph_search import _fts_config, _seed_tsquery
+
+    async with app_sessions() as session:
+        matched = (
+            await session.execute(
+                select(
+                    func.to_tsvector(_fts_config(), entity_name).op("@@")(
+                        _seed_tsquery(question)
+                    )
+                )
+            )
+        ).scalar()
+
+    assert matched is True, f"问句 {question!r} 认不出实体 {entity_name!r}"
+
+
+async def test_seed_query_does_not_match_unrelated_entities(app_sessions) -> None:
+    """析取化不能滑成"什么都匹配":问句里没提到的实体不该成为种子。"""
+    from sqlalchemy import func, select
+
+    from nicekit.kb.graph_search import _fts_config, _seed_tsquery
+
+    async with app_sessions() as session:
+        matched = (
+            await session.execute(
+                select(
+                    func.to_tsvector(_fts_config(), "云梯调度器").op("@@")(
+                        _seed_tsquery("澜图鉴权服务部署在哪个机房")
+                    )
+                )
+            )
+        ).scalar()
+
+    assert matched is False
