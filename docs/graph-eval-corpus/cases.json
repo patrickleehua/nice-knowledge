@@ -2,61 +2,61 @@
   {
     "query": "星轨网关的会话数据最终存在哪里",
     "query_type": "multi_hop",
-    "relevant": ["砚台存储.md#chunk0"],
-    "_why": "答案在《砚台存储》,而那篇文档不含'星轨网关'四个字。必须走 星轨网关→澜图鉴权→砚台存储 两跳。这是本组最核心的一条。"
+    "relevant": ["澜图鉴权服务.md#chunk2"],
+    "_why": "答案是《澜图鉴权服务》的'会话数据的落盘位置'一节,那段不含'星轨网关'四个字。图谱路径:星轨网关 --located_in--> 沧澜集群 --includes--> 澜图鉴权服务,2 跳可达。"
   },
   {
     "query": "云梯调度器的作业日志最终归档到什么地方",
     "query_type": "multi_hop",
-    "relevant": ["青简日志系统.md#chunk0"],
-    "_why": "云梯调度器只说推给青简日志,归档去向写在《青简日志系统》里,那篇不含'云梯调度器'。"
+    "relevant": ["青简日志系统.md#chunk2"],
+    "_why": "答案是《青简日志系统》的'归档去向'一节,那段不含'云梯调度器'。注意:抽取未建立 云梯调度器→青简日志系统 的边,图谱上不可达,这条是当前图谱结构下的负例。"
   },
   {
     "query": "澜图鉴权服务部署在哪个机房",
     "query_type": "multi_hop",
-    "relevant": ["沧澜集群.md#chunk0"],
-    "_why": "澜图鉴权只说在沧澜集群,机房归属写在《沧澜集群》里。澜图鉴权→沧澜集群→北辰机房。"
+    "relevant": ["沧澜集群.md#chunk1"],
+    "_why": "澜图鉴权只说在沧澜集群,机房归属写在《沧澜集群》的'集群定位'一节。图谱路径:沧澜集群 --includes--> 澜图鉴权服务,1 跳可达。"
   },
   {
     "query": "澜图鉴权的校验为什么会在凌晨变慢",
     "query_type": "multi_hop",
-    "relevant": ["砚台存储.md#chunk0"],
-    "_why": "澜图鉴权只提示'去看下游存储是否在压缩合并',真正的凌晨 3-5 点分层迁移窗口写在《砚台存储》。"
+    "relevant": ["砚台存储.md#chunk2"],
+    "_why": "澜图鉴权只提示'去看下游存储是否在压缩合并',凌晨 3-5 点分层迁移窗口写在《砚台存储》的'冷热分层'一节,那段不含'澜图鉴权'。图谱路径:砚台存储 --supports--> 澜图鉴权服务,1 跳可达。"
   },
   {
     "query": "星轨网关所在的集群和存储在不在同一个机房",
     "query_type": "multi_hop",
-    "relevant": ["沧澜集群.md#chunk0", "砚台存储.md#chunk0"],
-    "_why": "需要同时够到沧澜集群与砚台存储两侧的机房归属,单篇文档答不了。"
+    "relevant": ["沧澜集群.md#chunk1", "砚台存储.md#chunk1"],
+    "_why": "需要同时够到两侧的机房归属。星轨网关→沧澜集群 1 跳;砚台存储那侧要靠 砚台存储--located_in-->北辰机房 反向连回来。"
   },
   {
     "query": "星轨网关的限流阈值是多少",
     "query_type": "single_hop",
-    "relevant": ["星轨网关.md#chunk0"],
+    "relevant": ["星轨网关.md#chunk3"],
     "_why": "对照组:答案直接写在提问所指的那篇文档里,图谱不该帮倒忙。"
   },
   {
     "query": "砚台存储单个键的值上限是多少",
     "query_type": "single_hop",
-    "relevant": ["砚台存储.md#chunk0"],
+    "relevant": ["砚台存储.md#chunk3"],
     "_why": "对照组。"
   },
   {
     "query": "云梯调度器作业失败后重试几次",
     "query_type": "single_hop",
-    "relevant": ["云梯调度器.md#chunk0"],
+    "relevant": ["云梯调度器.md#chunk5"],
     "_why": "对照组。"
   },
   {
     "query": "青简日志系统本地保留多少天的日志",
     "query_type": "single_hop",
-    "relevant": ["青简日志系统.md#chunk0"],
+    "relevant": ["青简日志系统.md#chunk2"],
     "_why": "对照组。"
   },
   {
     "query": "沧澜集群有多少个工作节点",
     "query_type": "single_hop",
-    "relevant": ["沧澜集群.md#chunk0"],
+    "relevant": ["沧澜集群.md#chunk3"],
     "_why": "对照组。"
   }
 ]

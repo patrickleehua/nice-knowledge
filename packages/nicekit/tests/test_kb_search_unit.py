@@ -1452,3 +1452,68 @@ def test_rerank_document_truncates_custom_attributes_within_total_budget() -> No
     assert document.startswith("policy_rule\nname: 出口合规细则\n")
     assert f"超长属性: {'长' * 400}\n" in document
     assert "长" * 401 not in document
+
+
+async def test_graph_only_candidate_never_takes_the_document_slot_from_other_channels(
+    monkeypatch,
+) -> None:
+    """同文档只出一条,图谱独有候选不得顶掉有词面/语义佐证的那一条。
+
+    图谱召回的是**关系证据**所在的切片(它证明两个实体相连),未必是回答问题的
+    那一段。真库实测:开图谱后"澜图鉴权服务部署在哪个机房"的代表从含答案的
+    沧澜集群#chunk1 被换成了关系证据 #chunk2,recall 直接归零。
+    """
+    from nicekit.kb import search as module
+    from nicekit.kb.graph_search import CHUNK_RESTORE, GraphRecallCandidate
+
+    source_doc_id = uuid4()
+    answer = _search_candidate(kind="chunk", source_doc_id=source_doc_id, structured_score=1.0)
+    _patch_structured_only(monkeypatch, [answer])
+
+    evidence_chunk = KbChunk(
+        id=uuid4(),
+        org_id=uuid4(),
+        kb_id=uuid4(),
+        source_doc_id=source_doc_id,  # 与答案同文档
+        content="关系证据段",
+        source_ref="doc.md#chunk9",
+    )
+
+    async def graph(*_args, **_kwargs):
+        return [
+            GraphRecallCandidate(
+                chunk=evidence_chunk,
+                kind="chunk",
+                entity_id=evidence_chunk.id,
+                score=99.0,  # 刻意给到远高于答案的分数
+                hops=1,
+                edge_ids=(uuid4(),),
+                predicates=("located_in",),
+                restore_mode=CHUNK_RESTORE,
+                anchor_entity_id=uuid4(),
+            )
+        ]
+
+    async def no_expiry(*_args, **_kwargs):
+        return set()
+
+    async def no_labels(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(module, "graph_recall_candidates", graph)
+    monkeypatch.setattr(module, "_expired_doc_ids", no_expiry)
+    monkeypatch.setattr(module, "_graph_path_labels", no_labels)
+
+    hits = await search_kb(
+        object(),  # type: ignore[arg-type]
+        uuid4(),
+        "机房归属",
+        top_k=5,
+        embedder=None,
+        reranker=None,
+        graph_enabled=True,
+    )
+
+    # 该文档露出的必须仍是有佐证的那一条,图谱证据段只计入 sibling
+    assert [hit.data["id"] for hit in hits] == [str(answer.key[1])]
+    assert hits[0].data["sibling_count"] == 1

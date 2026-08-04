@@ -2942,15 +2942,31 @@ async def _search_kb_uncached(
     folded_keys: list[CandidateKey] = []
     source_representatives: dict[str, CandidateKey] = {}
     sibling_counts: dict[CandidateKey, int] = {}
-    for key in final_keys:
+
+    def _source_doc(key: CandidateKey) -> str | None:
         hit = registry[key].hit
-        source_doc_id = hit.data.get("source_doc_id") if hit.kind == "chunk" else None
-        if isinstance(source_doc_id, str) and source_doc_id:
-            representative = source_representatives.get(source_doc_id)
-            if representative is not None:
+        value = hit.data.get("source_doc_id") if hit.kind == "chunk" else None
+        return value if isinstance(value, str) and value else None
+
+    # 同文档只出一条,所以"谁当代表"直接决定这篇文档露出的是哪一段。图谱召回的是
+    # **关系证据**所在的切片(它证明两个实体相连),未必是回答问题的那一段;让它靠
+    # graph 分数顶掉同文档里有词面/语义佐证的切片,等于把答案换成了旁证。
+    # 因此先让非图谱独有的候选占据代表权,图谱独有候选只在该文档尚无代表时补位——
+    # 这样图谱"带回其它通道够不到的文档"的能力不受影响,只是不再抢已覆盖文档的坑。
+    for key in final_keys:
+        if set(registry[key].native_scores) == {"graph"}:
+            continue
+        source_doc_id = _source_doc(key)
+        if source_doc_id and source_doc_id not in source_representatives:
+            source_representatives[source_doc_id] = key
+
+    for key in final_keys:
+        source_doc_id = _source_doc(key)
+        if source_doc_id:
+            representative = source_representatives.setdefault(source_doc_id, key)
+            if representative != key:
                 sibling_counts[representative] = sibling_counts.get(representative, 0) + 1
                 continue
-            source_representatives[source_doc_id] = key
         folded_keys.append(key)
     folded_keys = folded_keys[:top_k]
     hits = [
