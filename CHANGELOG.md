@@ -9,16 +9,29 @@
 
 ## [未发布]
 
-### 新增
-- Apache-2.0 协议、`NOTICE`、PyPI 发布元数据与 GitHub Actions 发布链路
-- 文档索引 [docs/README.md](docs/README.md) 与面向 AI 编码助手的仓库说明 [AGENTS.md](AGENTS.md)
-- 发布手册 [docs/RELEASING.md](docs/RELEASING.md)
+## [0.1.1] - 2026-08-05
+
+### 修复
+- **LLM 断流同 hop 加试**:`connection_error`(链路被网关/中间层掐断的快速失败)
+  在同一 provider/model 上原地加试一次(0.2s 退避)后才进降级链。此前单跳路由
+  (未配降级位)下一次网络抖动就是用户可见的"全部 provider 失败"。
+  `timeout` / `rate_limit` 行为不变,仍立即走降级链。流式工具调用加试前会回调
+  `on_delta(None)` / `on_thinking(None)` 通知调用方丢弃半截文本
+- **caption 失败根因日志**:`kb/caption.py` 两处吞异常改为先以 WARNING 记录
+  原始异常再统一上抛 `caption_failed`,对外错误码不变,探针/审计口径不受影响
+
+### 变更
+- 示例宿主 `.env.example` 补充 `LLM_FALLBACK_PROVIDER` / `LLM_FALLBACK_MODEL`
+  降级位配置与 `RERANK_TIMEOUT_SECONDS` 调优说明
 
 ## [0.1.0] - 2026-08-04
 
 首个版本。从生产系统 TravelFlow AI 抽取通用能力,形成独立的多租户 Agent + 知识库平台 SDK。
 
 ### 新增
+- Apache-2.0 协议、`NOTICE`、PyPI 发布元数据与 GitHub Actions 发布链路
+- 文档索引 [docs/README.md](docs/README.md) 与面向 AI 编码助手的仓库说明 [AGENTS.md](AGENTS.md)
+- 发布手册 [docs/RELEASING.md](docs/RELEASING.md)
 - **多租户底座**:组织 / 用户 / 成员 / 邀请、JWT + 旋转式 refresh token、
   PostgreSQL `FORCE ROW LEVEL SECURITY` 强隔离,三种接入模式(全托管 / 桥接 / 单租户)
 - **LLM 多模型层**:OpenAI / Anthropic 双协议归一、模型能力注册表、模型 ID 归一化、
@@ -33,5 +46,6 @@
 - **API**:`/api/v1` 下 18 个 router、182 个 REST 端点
 - **示例宿主**:`apps/demo`(Nice Knowledge)—— FastAPI 后端 + Next.js 前端
 
-[未发布]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.0...HEAD
+[未发布]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/patrickleehua/nice-knowledge/releases/tag/v0.1.0
