@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import logging
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from uuid import UUID
@@ -14,6 +15,8 @@ from nicekit.llm.capability_routes import (
     system_route_selection,
 )
 from nicekit.llm.service import LLMService
+
+logger = logging.getLogger(__name__)
 
 CAPTION_TASK = "kb.caption.image"
 _MAX_FILENAME_PROMPT_CHARS = 255
@@ -171,7 +174,9 @@ async def caption_image_with_metadata(
         raise CaptionExecutionError("caption_timeout") from None
     except CaptionExecutionError:
         raise
-    except Exception:
+    except Exception as exc:
+        # 对外统一 caption_failed(错误码进探针/审计),真实原因只进日志
+        logger.warning("caption 调用失败 provider=%s model=%s error=%r", provider, model, exc)
         raise CaptionExecutionError("caption_failed") from None
     return CaptionGeneration(
         caption=generation.parsed,
@@ -236,7 +241,8 @@ async def inspect_image_with_metadata(
         raise CaptionExecutionError("caption_timeout") from None
     except CaptionExecutionError:
         raise
-    except Exception:
+    except Exception as exc:
+        logger.warning("图片核验调用失败 provider=%s model=%s error=%r", provider, model, exc)
         raise CaptionExecutionError("caption_failed") from None
     return CaptionGeneration(
         caption=generation.parsed,

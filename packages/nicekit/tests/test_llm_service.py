@@ -22,23 +22,32 @@ class FakePrompt:
 
 
 class FakeProvider:
-    def __init__(self, name: str, *, fail: Exception | None = None):
+    def __init__(
+        self, name: str, *, fail: Exception | None = None, fail_times: int | None = None
+    ):
+        # fail_times=None 时持续失败;=N 时前 N 次失败后恢复(模拟瞬时断流)
         self.name = name
         self.fail = fail
+        self.fail_times = fail_times
         self.calls: list[dict] = []
+
+    def _maybe_fail(self) -> None:
+        if self.fail is None:
+            return
+        if self.fail_times is not None and len(self.calls) > self.fail_times:
+            return
+        raise self.fail
 
     async def generate_structured(self, **kwargs):
         self.calls.append(kwargs)
-        if self.fail is not None:
-            raise self.fail
+        self._maybe_fail()
         return ProviderResult(
             parsed=FakeOutput(answer=f"from-{self.name}"), tokens_in=10, tokens_out=5
         )
 
     async def generate_with_tools(self, **kwargs):
         self.calls.append(kwargs)
-        if self.fail is not None:
-            raise self.fail
+        self._maybe_fail()
         return ToolLoopResult(
             text=f"from-{self.name}",
             tool_calls=[],
@@ -133,6 +142,70 @@ async def test_primary_success_no_fallback(make_service, records):
     assert records[0]["status"] == "success"
     assert records[0]["fallback_from"] is None
     assert records[0]["prompt_version"] == 3
+
+
+async def test_connection_error_retries_same_hop_before_fallback(make_service, records):
+    """一次断流原地加试成功:不进降级链,不把失败抛给用户。"""
+    p1 = FakeProvider(
+        "p1", fail=ProviderError("connection_error", retryable=True), fail_times=1
+    )
+    svc = make_service({"p1": p1}, fallback_chain=[])
+    result = await svc.generate_structured(
+        task="t", messages=[{"role": "user", "content": "hi"}],
+        output_model=FakeOutput, org_id=uuid4(),
+    )
+    assert result.answer == "from-p1"
+    assert len(p1.calls) == 2
+    assert [r["status"] for r in records] == ["error", "success"]
+    assert records[1]["fallback_from"] is None  # 同 hop 加试不算降级
+
+
+async def test_connection_error_exhausts_retry_then_falls_back(make_service, records):
+    """持续断流:同 hop 加试一次后仍失败,才进降级链。"""
+    p1 = FakeProvider("p1", fail=ProviderError("connection_error", retryable=True))
+    p2 = FakeProvider("p2")
+    svc = make_service({"p1": p1, "p2": p2}, fallback_chain=[{"provider": "p2", "model": "m2"}])
+    result = await svc.generate_structured(
+        task="t", messages=[{"role": "user", "content": "hi"}],
+        output_model=FakeOutput, org_id=uuid4(),
+    )
+    assert result.answer == "from-p2"
+    assert len(p1.calls) == 2
+    assert [r["status"] for r in records] == ["error", "error", "success"]
+    assert records[2]["fallback_from"] == "p1:m1"
+
+
+async def test_tools_connection_error_retry_resets_stream(make_service, records):
+    """tools 路径:同 hop 加试前必须回调 on_delta(None) 丢弃半截流式文本。"""
+    p1 = FakeProvider(
+        "p1", fail=ProviderError("connection_error", retryable=True), fail_times=1
+    )
+    svc = make_service({"p1": p1}, fallback_chain=[])
+    deltas: list[str | None] = []
+
+    async def on_delta(chunk):
+        deltas.append(chunk)
+
+    turn = await svc.generate_with_tools(
+        task="t", system="s", messages=[{"role": "user", "content": "hi"}],
+        tools=[], org_id=uuid4(), on_delta=on_delta,
+    )
+    assert turn.text == "from-p1"
+    assert len(p1.calls) == 2
+    assert None in deltas  # 加试前发出过丢弃信号
+
+
+async def test_timeout_does_not_retry_same_hop(make_service, records):
+    """timeout 不做同 hop 加试:已烧满超时预算,立即走降级链。"""
+    p1 = FakeProvider("p1", fail=ProviderError("timeout", retryable=True), fail_times=1)
+    p2 = FakeProvider("p2")
+    svc = make_service({"p1": p1, "p2": p2}, fallback_chain=[{"provider": "p2", "model": "m2"}])
+    result = await svc.generate_structured(
+        task="t", messages=[{"role": "user", "content": "hi"}],
+        output_model=FakeOutput, org_id=uuid4(),
+    )
+    assert result.answer == "from-p2"
+    assert len(p1.calls) == 1
 
 
 async def test_retryable_error_falls_back(make_service, records):

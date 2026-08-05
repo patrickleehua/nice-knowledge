@@ -45,6 +45,15 @@ CallT = TypeVar("CallT")
 logger = logging.getLogger(__name__)
 
 
+# 同 hop 断流加试:connection_error 是快速失败(链路被网关/中间层掐断,几乎
+# 不消耗超时预算),原地加试一次的代价远低于把失败抛给用户 —— 单跳路由(无降级
+# 位)下这就是"一次网络抖动 = 用户可见失败"。timeout 不加试(已烧满整段超时
+# 预算),rate_limit 不加试(原地重试只会再撞限流),两者仍立即走降级链。
+_SAME_HOP_RETRIES = 1
+_SAME_HOP_RETRY_CODES = frozenset({"connection_error"})
+_SAME_HOP_RETRY_DELAY_SECONDS = 0.2
+
+
 class NoRouteError(Exception):
     pass
 
@@ -311,41 +320,52 @@ class LLMService:
                     errors.append("provider_error")
                     continue
 
-                started = time.monotonic()
-                try:
-                    result = await provider.generate_structured(
-                        model=hop["model"],
-                        system=prompt.content,
-                        messages=messages,
-                        output_model=output_model,
-                        max_tokens=route.max_tokens,
-                        timeout_seconds=route.timeout_seconds,
-                    )
-                except ProviderError as exc:
-                    safe_error = sanitize_provider_error(exc)
-                    latency = int((time.monotonic() - started) * 1000)
+                result = None
+                for hop_try in range(1 + _SAME_HOP_RETRIES):
+                    started = time.monotonic()
                     try:
-                        await self._record(
-                            org_id=org_id, task=task,
-                            provider=hop["provider"], model=hop["model"],
-                            prompt_version=prompt.version, attempt=attempt_no,
-                            fallback_from=fallback_from, status="error",
-                            error=safe_error.diagnostic,
-                            tokens_in=0, tokens_out=0, latency_ms=latency,
+                        result = await provider.generate_structured(
+                            model=hop["model"],
+                            system=prompt.content,
+                            messages=messages,
+                            output_model=output_model,
+                            max_tokens=route.max_tokens,
+                            timeout_seconds=route.timeout_seconds,
                         )
-                    except Exception:
-                        logger.error(
-                            "provider 失败后的 trace 写入失败: "
-                            "task=%s provider=%s model=%s",
-                            task,
-                            hop["provider"],
-                            hop["model"],
-                        )
-                    errors.append(safe_error.diagnostic)
-                    if not safe_error.retryable:
-                        raise safe_error from None
-                    self._mark_provider_failed(hop)
-                    fallback_from = f"{hop['provider']}:{hop['model']}"
+                        break
+                    except ProviderError as exc:
+                        safe_error = sanitize_provider_error(exc)
+                        latency = int((time.monotonic() - started) * 1000)
+                        try:
+                            await self._record(
+                                org_id=org_id, task=task,
+                                provider=hop["provider"], model=hop["model"],
+                                prompt_version=prompt.version, attempt=attempt_no,
+                                fallback_from=fallback_from, status="error",
+                                error=safe_error.diagnostic,
+                                tokens_in=0, tokens_out=0, latency_ms=latency,
+                            )
+                        except Exception:
+                            logger.error(
+                                "provider 失败后的 trace 写入失败: "
+                                "task=%s provider=%s model=%s",
+                                task,
+                                hop["provider"],
+                                hop["model"],
+                            )
+                        errors.append(safe_error.diagnostic)
+                        if not safe_error.retryable:
+                            raise safe_error from None
+                        if (
+                            hop_try < _SAME_HOP_RETRIES
+                            and safe_error.code in _SAME_HOP_RETRY_CODES
+                        ):
+                            await asyncio.sleep(_SAME_HOP_RETRY_DELAY_SECONDS)
+                            continue
+                        self._mark_provider_failed(hop)
+                        fallback_from = f"{hop['provider']}:{hop['model']}"
+                        break
+                if result is None:
                     continue
 
                 latency = int((time.monotonic() - started) * 1000)
@@ -416,50 +436,62 @@ class LLMService:
                     errors.append("provider_error")
                     continue
 
-                if fallback_from is not None:
-                    if on_delta is not None:
-                        await on_delta(None)
-                    if on_thinking is not None:
-                        await on_thinking(None)
-                started = time.monotonic()
-                try:
-                    result = await provider.generate_with_tools(
-                        model=hop["model"],
-                        system=system,
-                        messages=messages,
-                        tools=tools,
-                        max_tokens=route.max_tokens,
-                        timeout_seconds=timeout_override or route.timeout_seconds,
-                        on_delta=on_delta,
-                        on_thinking=on_thinking,
-                        thinking_level=thinking_level,
-                        builtin_web_search=builtin_web_search,
-                    )
-                except ProviderError as exc:
-                    safe_error = sanitize_provider_error(exc)
-                    latency = int((time.monotonic() - started) * 1000)
+                result = None
+                for hop_try in range(1 + _SAME_HOP_RETRIES):
+                    if fallback_from is not None or hop_try:
+                        # 换 provider 或同 hop 加试前,通知调用方丢弃半截流式文本
+                        if on_delta is not None:
+                            await on_delta(None)
+                        if on_thinking is not None:
+                            await on_thinking(None)
+                    started = time.monotonic()
                     try:
-                        await self._record(
-                            org_id=org_id, task=task,
-                            provider=hop["provider"], model=hop["model"],
-                            prompt_version=None, attempt=attempt_no,
-                            fallback_from=fallback_from, status="error",
-                            error=safe_error.diagnostic,
-                            tokens_in=0, tokens_out=0, latency_ms=latency,
+                        result = await provider.generate_with_tools(
+                            model=hop["model"],
+                            system=system,
+                            messages=messages,
+                            tools=tools,
+                            max_tokens=route.max_tokens,
+                            timeout_seconds=timeout_override or route.timeout_seconds,
+                            on_delta=on_delta,
+                            on_thinking=on_thinking,
+                            thinking_level=thinking_level,
+                            builtin_web_search=builtin_web_search,
                         )
-                    except Exception:
-                        logger.error(
-                            "provider 失败后的 trace 写入失败: "
-                            "task=%s provider=%s model=%s",
-                            task,
-                            hop["provider"],
-                            hop["model"],
-                        )
-                    errors.append(safe_error.diagnostic)
-                    if not safe_error.retryable:
-                        raise safe_error from None
-                    self._mark_provider_failed(hop)
-                    fallback_from = f"{hop['provider']}:{hop['model']}"
+                        break
+                    except ProviderError as exc:
+                        safe_error = sanitize_provider_error(exc)
+                        latency = int((time.monotonic() - started) * 1000)
+                        try:
+                            await self._record(
+                                org_id=org_id, task=task,
+                                provider=hop["provider"], model=hop["model"],
+                                prompt_version=None, attempt=attempt_no,
+                                fallback_from=fallback_from, status="error",
+                                error=safe_error.diagnostic,
+                                tokens_in=0, tokens_out=0, latency_ms=latency,
+                            )
+                        except Exception:
+                            logger.error(
+                                "provider 失败后的 trace 写入失败: "
+                                "task=%s provider=%s model=%s",
+                                task,
+                                hop["provider"],
+                                hop["model"],
+                            )
+                        errors.append(safe_error.diagnostic)
+                        if not safe_error.retryable:
+                            raise safe_error from None
+                        if (
+                            hop_try < _SAME_HOP_RETRIES
+                            and safe_error.code in _SAME_HOP_RETRY_CODES
+                        ):
+                            await asyncio.sleep(_SAME_HOP_RETRY_DELAY_SECONDS)
+                            continue
+                        self._mark_provider_failed(hop)
+                        fallback_from = f"{hop['provider']}:{hop['model']}"
+                        break
+                if result is None:
                     continue
 
                 latency = int((time.monotonic() - started) * 1000)
