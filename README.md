@@ -14,7 +14,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/patrickleehua/nice-knowledge/actions/workflows/ci.yml/badge.svg)](https://github.com/patrickleehua/nice-knowledge/actions/workflows/ci.yml)
 
-[快速开始](#快速开始) · [文档](docs/README.md) · [接入指南](docs/INTEGRATION.md) · [English](README.en.md)
+[界面预览](#界面预览) · [快速开始](#快速开始) · [文档](docs/README.md) · [接入指南](docs/INTEGRATION.md) · [English](README.en.md)
 
 </div>
 
@@ -28,6 +28,78 @@
 
 **Nice Knowledge** 是本仓库随附的示例宿主:一个基于 NiceKit 搭建的知识工作台,
 既能跑起来看完整产品形态,也是"这个 SDK 怎么用"的活文档。
+
+## 界面预览
+
+Nice Knowledge 把 NiceKit 的 Agent、知识检索与知识库流水线组装成了可直接运行的产品界面。
+点击截图可查看原图。
+
+<p align="center">
+  <a href="images/demo/agent能力.png">
+    <img src="images/demo/agent能力.png" alt="AI 助手使用知识库完成带来源的回答" width="100%" />
+  </a>
+  <br />
+  <sub><b>AI 助手</b> —— 多轮工具调用、知识库检索、会话目标与审批在同一个工作台完成</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="images/demo/知识检索.png">
+        <img src="images/demo/知识检索.png" alt="带可核验来源的知识检索与 AI 解答" width="100%" />
+      </a>
+      <br />
+      <sub><b>知识检索</b> —— 基于可核验来源归纳回答并逐条标注引用</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="images/demo/知识库流水线.png">
+        <img src="images/demo/知识库流水线.png" alt="从资料摄入到快照发布的知识库流水线" width="100%" />
+      </a>
+      <br />
+      <sub><b>知识库流水线</b> —— 资料、图片、实体、Wiki、图谱与发布状态一屏可见</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary><b>查看平台管理端:模型路由、Prompt、用量审计与系统诊断</b></summary>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="images/demo/可降级模型链.png">
+        <img src="images/demo/可降级模型链.png" alt="系统能力基线与任务专属模型降级链" width="100%" />
+      </a>
+      <br />
+      <sub><b>可降级模型链</b> —— 按能力和任务配置主模型与降级顺序</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="images/demo/动态提示词.png">
+        <img src="images/demo/动态提示词.png" alt="Prompt 注册表与动态组装预览" width="100%" />
+      </a>
+      <br />
+      <sub><b>动态 Prompt</b> —— 浏览系统资源、预览组装结果并管理可编辑版本</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="images/demo/费用请求审计.png">
+        <img src="images/demo/费用请求审计.png" alt="Token 用量、模型成本和缓存命中率统计" width="100%" />
+      </a>
+      <br />
+      <sub><b>用量与费用审计</b> —— 四桶 token 计量、请求成本与缓存命中趋势</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="images/demo/系统诊断.png">
+        <img src="images/demo/系统诊断.png" alt="模型、进程、任务、Agent 与知识采集系统诊断" width="100%" />
+      </a>
+      <br />
+      <sub><b>系统诊断</b> —— 统一检查模型、进程、定时任务、Agent 与知识采集链路</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
 
 ### 它解决什么
 
