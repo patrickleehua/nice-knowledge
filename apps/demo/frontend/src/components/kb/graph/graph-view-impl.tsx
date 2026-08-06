@@ -98,6 +98,11 @@ function SigmaBridge({ onReady }: { onReady: (sigma: Sigma | null) => void }) {
   return null;
 }
 
+/** SigmaContainer 重建实例时,旧实例会先 kill,但父级 state 可能到下一次提交才清空。 */
+function isSigmaAlive(sigma: Sigma | null): sigma is Sigma {
+  return Boolean(sigma?.getCanvases().nodes);
+}
+
 export default function KbGraphViewImpl({ kbId }: { kbId: string }) {
   const palette = useSigmaPalette();
 
@@ -322,7 +327,7 @@ export default function KbGraphViewImpl({ kbId }: { kbId: string }) {
 
   // ---- reducer:过滤隐藏 → 悬停弱化非邻居 → 搜索命中高亮 -----------------------
   useEffect(() => {
-    if (!sigma) return;
+    if (!isSigmaAlive(sigma)) return;
     sigma.setSettings({
       nodeReducer: (node, attrs) => {
         const baseSize = (attrs.size as number | undefined) ?? 4;
@@ -378,7 +383,6 @@ export default function KbGraphViewImpl({ kbId }: { kbId: string }) {
         return res;
       },
     });
-    sigma.refresh();
   }, [
     sigma,
     hiddenNodes,
