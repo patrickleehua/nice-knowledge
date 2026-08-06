@@ -138,7 +138,7 @@ Full documentation lives in the repository. It is written in Chinese; the reposi
 
 ## Status
 
-`0.1.0`. **The public API is not frozen.** During 0.x, minor versions may carry breaking changes —
+`0.1.2`. **The public API is not frozen.** During 0.x, minor versions may carry breaking changes —
 read the [changelog](https://github.com/patrickleehua/nice-knowledge/blob/main/CHANGELOG.md)
 before upgrading.
 

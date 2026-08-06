@@ -9,6 +9,17 @@
 
 ## [未发布]
 
+## [0.1.2] - 2026-08-06
+
+### 修复
+- **Sigma 图谱实例重建**:示例前端在 graph 或 settings 变化导致 Sigma 实例重建时,
+  会先确认实例仍持有 nodes canvas 再更新 reducer,避免旧实例已销毁但父级 state 尚未清空时
+  触发渲染失败
+
+### 文档
+- 根 README 新增 Nice Knowledge 界面预览,展示 AI 助手、知识检索、知识库流水线、
+  模型路由、动态 Prompt、用量审计与系统诊断
+
 ## [0.1.1] - 2026-08-05
 
 ### 修复
@@ -46,6 +57,7 @@
 - **API**:`/api/v1` 下 18 个 router、182 个 REST 端点
 - **示例宿主**:`apps/demo`(Nice Knowledge)—— FastAPI 后端 + Next.js 前端
 
-[未发布]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.1...HEAD
+[未发布]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/patrickleehua/nice-knowledge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/patrickleehua/nice-knowledge/releases/tag/v0.1.0

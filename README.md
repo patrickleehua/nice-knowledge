@@ -316,7 +316,7 @@ docs/                 全部文档
 
 ## 项目状态
 
-`0.1.0`,**公开 API 尚未冻结**。0.x 阶段次版本号可能带不兼容变更,升级前请读 [CHANGELOG.md](CHANGELOG.md)。
+`0.1.2`,**公开 API 尚未冻结**。0.x 阶段次版本号可能带不兼容变更,升级前请读 [CHANGELOG.md](CHANGELOG.md)。
 
 测试:135 个测试文件。`cd packages/nicekit && uv run --package nicekit pytest` 实测
 **1967 passed / 4 skipped / 53 deselected,约 45 秒,不需要任何外部服务**;
